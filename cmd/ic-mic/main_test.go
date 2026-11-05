@@ -124,3 +124,18 @@ func TestViewSnapshotsKeepRXAndTXIndependent(t *testing.T) {
 		t.Fatalf("las pestañas no permanecen separadas: TX %d, RX %d", a.txView.activeTab, a.rxView.activeTab)
 	}
 }
+
+func TestMeterGradientCoversFullSignalRange(t *testing.T) {
+	low := meterGradient(0)
+	middle := meterGradient(.56)
+	high := meterGradient(1)
+	if low.B <= low.R || low.G <= low.R {
+		t.Fatalf("el inicio del medidor no es cian: %+v", low)
+	}
+	if middle.G <= middle.R || middle.G <= middle.B {
+		t.Fatalf("el centro del medidor no es verde: %+v", middle)
+	}
+	if high.R <= high.G || high.R <= high.B {
+		t.Fatalf("el final del medidor no es rojo: %+v", high)
+	}
+}

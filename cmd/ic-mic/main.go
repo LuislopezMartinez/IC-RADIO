@@ -1188,19 +1188,36 @@ func drawMeter(x, y, w, h float32, label string, db float32) {
 	norm := float32(math.Max(0, math.Min(1, float64((db+60)/60))))
 	for i := 0; i < 30; i++ {
 		xx := bar.X + 7 + float32(i)*(bar.Width-14)/30
-		c := color.green
-		if i > 23 {
-			c = color.amber
-		}
-		if i > 27 {
-			c = color.red
-		}
+		c := meterGradient(float32(i) / 29)
 		if float32(i)/30 > norm {
 			c = rl.NewColor(48, 60, 69, 255)
 		}
 		rl.DrawRectangle(int32(xx), int32(bar.Y+8), int32((bar.Width-20)/32), int32(bar.Height-16), c)
 	}
 	drawText("-60       -40       -20       -10    -3  0 dB", int32(x+28), int32(y+145), 15, color.muted)
+}
+
+func meterGradient(position float32) rl.Color {
+	position = max(float32(0), min(float32(1), position))
+	stops := []struct {
+		at    float32
+		color rl.Color
+	}{
+		{0, rl.NewColor(0, 224, 238, 255)},
+		{.24, rl.NewColor(28, 232, 129, 255)},
+		{.56, rl.NewColor(91, 235, 48, 255)},
+		{.78, rl.NewColor(230, 235, 32, 255)},
+		{.92, rl.NewColor(255, 183, 24, 255)},
+		{1, rl.NewColor(239, 61, 35, 255)},
+	}
+	for i := 1; i < len(stops); i++ {
+		if position <= stops[i].at {
+			span := stops[i].at - stops[i-1].at
+			amount := (position - stops[i-1].at) / span
+			return mix(stops[i-1].color, stops[i].color, amount)
+		}
+	}
+	return stops[len(stops)-1].color
 }
 
 func (a *app) drawPTT(mouse rl.Vector2) {
