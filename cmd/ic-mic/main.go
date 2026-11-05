@@ -1626,8 +1626,12 @@ func (a *app) drawEffects() {
 		drawButton(rl.NewRectangle(float32(95+i*165), 826, 150, 36), label, a.config.Echo.Tone == tones[i])
 	}
 	rl.DrawLine(625, 826, 625, 862, color.border)
+	presets := [][3]float64{{80, 8, 8}, {140, 15, 12}, {260, 25, 18}}
 	for i, label := range []string{"CORTO", "MEDIO", "LARGO"} {
-		drawButton(rl.NewRectangle(float32(690+i*155), 826, 140, 36), label, false)
+		preset := presets[i]
+		selected := a.config.Echo.Enabled && math.Abs(a.config.Echo.DelayMS-preset[0]) < .5 &&
+			math.Abs(a.config.Echo.Feedback-preset[1]) < .5 && math.Abs(a.config.Echo.MixPercent-preset[2]) < .5
+		drawButton(rl.NewRectangle(float32(690+i*155), 826, 140, 36), label, selected)
 	}
 
 	rl.DrawLine(1200, 670, 1200, 855, color.border)
@@ -1677,12 +1681,24 @@ func drawSectionToggle(enabled bool) {
 
 func drawButton(r rl.Rectangle, label string, active bool) {
 	fill := color.panel2
+	border := color.border
+	textColor := color.text
 	if active {
-		fill = rl.NewColor(25, 75, 60, 255)
+		fill = rl.NewColor(73, 51, 17, 255)
+		border = color.amber
+		textColor = rl.NewColor(255, 224, 151, 255)
+		for glow := 5; glow >= 1; glow-- {
+			expand := float32(glow * 2)
+			glowRect := rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2)
+			rl.DrawRectangleRounded(glowRect, .18, 8, rl.NewColor(color.amber.R, color.amber.G, color.amber.B, uint8(6+glow*6)))
+		}
 	}
 	rl.DrawRectangleRounded(r, .18, 6, fill)
-	rl.DrawRectangleRoundedLines(r, .18, 6, color.border)
-	drawCentered(label, r, 18, color.text, 0)
+	rl.DrawRectangleRoundedLines(r, .18, 6, border)
+	if active {
+		rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), .18, 6, rl.NewColor(255, 211, 91, 150))
+	}
+	drawCentered(label, r, 18, textColor, 0)
 }
 
 func drawCentered(text string, r rl.Rectangle, size int32, c rl.Color, offsetY float32) {
