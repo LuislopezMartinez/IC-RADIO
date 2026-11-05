@@ -15,6 +15,7 @@ USB externo, procesar la voz y enviarla a la entrada de audio USB de la radio.
 - Énfasis de voz SSB y deénfasis FM de 50/75 µs.
 - Notch RX gráfico con frecuencia, anchura y profundidad ajustables.
 - Compresor TX en pasos predefinidos.
+- Eco TX con retardo, realimentación, mezcla, tono y perfiles rápidos.
 - Reducción de ruido regulable con integración lenta, media o rápida.
 - Ganancia independiente para RX y TX.
 - Monitor `MON` para escuchar la señal TX procesada por los auriculares RX.

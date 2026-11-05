@@ -42,6 +42,22 @@ type CompressorStatus struct {
 	GainDB float32
 }
 
+type EchoTone string
+
+const (
+	EchoDark    EchoTone = "dark"
+	EchoNeutral EchoTone = "neutral"
+	EchoBright  EchoTone = "bright"
+)
+
+type EchoConfig struct {
+	Enabled    bool
+	DelayMS    float64
+	Feedback   float64
+	MixPercent float64
+	Tone       EchoTone
+}
+
 type Config struct {
 	LowCutHz, HighCutHz  float64
 	EQEnabled            bool
@@ -57,6 +73,7 @@ type Config struct {
 	OutputGainDB         float64
 	ProcessedMix         float64
 	Compressor           CompressorConfig
+	Echo                 EchoConfig
 }
 
 func DefaultConfig() Config {
@@ -71,6 +88,7 @@ func DefaultConfig() Config {
 		Compressor: CompressorConfig{
 			TargetDBFS: -18,
 		},
+		Echo: EchoConfig{DelayMS: 120, Feedback: 15, MixPercent: 10, Tone: EchoNeutral},
 	}
 }
 

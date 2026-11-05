@@ -127,6 +127,7 @@ type app struct {
 	cutoffDrag       int
 	controlDrag      int
 	notchDrag        int
+	echoDrag         int
 	pttSettingsOpen  bool
 	capturingPTTKey  bool
 	keyPTTActive     bool
@@ -150,7 +151,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	a := &app{processor: p, engine: e, config: audio.DefaultConfig(), spectrum: make([]float32, 257), dragEQ: -1, cutoffDrag: -1, controlDrag: -1, notchDrag: -1, openDeviceMenu: -1, line: ptt.RTS, mode: "tx", radioState: stateTXReady, txSignal: txSignal, monitor: monitor}
+	a := &app{processor: p, engine: e, config: audio.DefaultConfig(), spectrum: make([]float32, 257), dragEQ: -1, cutoffDrag: -1, controlDrag: -1, notchDrag: -1, echoDrag: -1, openDeviceMenu: -1, line: ptt.RTS, mode: "tx", radioState: stateTXReady, txSignal: txSignal, monitor: monitor}
 	defer func() {
 		_ = a.ptt.SetTX(false)
 		a.ptt.Close()
@@ -509,6 +510,7 @@ func (a *app) update(mouse rl.Vector2) {
 		a.cutoffDrag = -1
 		a.controlDrag = -1
 		a.notchDrag = -1
+		a.echoDrag = -1
 	}
 	if clicked(mouse, rl.NewRectangle(650, 22, 100, 48)) {
 		a.switchMode("rx")
@@ -573,7 +575,7 @@ func (a *app) update(mouse rl.Vector2) {
 	if a.mode == "tx" && clicked(mouse, rl.NewRectangle(1460, 403, 82, 40)) {
 		a.toggleOutputMonitor()
 	}
-	if clicked(mouse, rl.NewRectangle(1370, 665, 180, 46)) {
+	if !(a.mode == "tx" && a.activeTab == 4) && clicked(mouse, rl.NewRectangle(1370, 665, 180, 46)) {
 		a.toggleActiveSection()
 	}
 	if a.activeTab == 1 {
@@ -808,6 +810,10 @@ func (a *app) updateEQ(mouse rl.Vector2) {
 }
 
 func (a *app) updatePanelControls(mouse rl.Vector2) {
+	if a.mode == "tx" && a.activeTab == 4 {
+		a.updateEchoControls(mouse)
+		return
+	}
 	if a.activeTab == 3 {
 		speeds := []audio.NoiseSpeed{audio.NoiseSlow, audio.NoiseNormal, audio.NoiseFast}
 		for i, speed := range speeds {
@@ -847,6 +853,76 @@ func (a *app) updatePanelControls(mouse rl.Vector2) {
 		return
 	}
 	a.applyDSPAndSave()
+}
+
+func (a *app) updateEchoControls(mouse rl.Vector2) {
+	changed := false
+	if clicked(mouse, rl.NewRectangle(55, 672, 170, 38)) {
+		a.config.Echo.Enabled = !a.config.Echo.Enabled
+		changed = true
+	}
+	toneRects := []rl.Rectangle{
+		rl.NewRectangle(95, 826, 150, 36),
+		rl.NewRectangle(260, 826, 150, 36),
+		rl.NewRectangle(425, 826, 150, 36),
+	}
+	tones := []audio.EchoTone{audio.EchoDark, audio.EchoNeutral, audio.EchoBright}
+	for i, r := range toneRects {
+		if clicked(mouse, r) {
+			a.config.Echo.Tone = tones[i]
+			a.config.Echo.Enabled = true
+			changed = true
+		}
+	}
+	presetRects := []rl.Rectangle{
+		rl.NewRectangle(690, 826, 140, 36),
+		rl.NewRectangle(845, 826, 140, 36),
+		rl.NewRectangle(1000, 826, 140, 36),
+	}
+	presets := [][3]float64{{80, 8, 8}, {140, 15, 12}, {260, 25, 18}}
+	for i, r := range presetRects {
+		if clicked(mouse, r) {
+			a.config.Echo.DelayMS, a.config.Echo.Feedback, a.config.Echo.MixPercent = presets[i][0], presets[i][1], presets[i][2]
+			a.config.Echo.Enabled = true
+			changed = true
+		}
+	}
+	tracks := []rl.Rectangle{
+		rl.NewRectangle(365, 714, 775, 26),
+		rl.NewRectangle(365, 754, 775, 26),
+		rl.NewRectangle(365, 794, 775, 26),
+		rl.NewRectangle(1260, 800, 250, 30),
+	}
+	if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
+		for i, track := range tracks {
+			if rl.CheckCollisionPointRec(mouse, track) {
+				a.echoDrag = i
+				break
+			}
+		}
+	}
+	if a.echoDrag >= 0 && a.echoDrag < len(tracks) && rl.IsMouseButtonDown(rl.MouseLeftButton) {
+		track := tracks[a.echoDrag]
+		percent := max(0.0, min(100.0, float64((mouse.X-track.X)/track.Width*100)))
+		switch a.echoDrag {
+		case 0:
+			a.config.Echo.DelayMS = math.Round((40+percent*4.6)/5) * 5
+			a.config.Echo.Enabled = true
+		case 1:
+			a.config.Echo.Feedback = math.Round(percent * .7)
+			a.config.Echo.Enabled = true
+		case 2:
+			a.config.Echo.MixPercent = math.Round(percent * .5)
+			a.config.Echo.Enabled = true
+		case 3:
+			a.config.OutputGainDB = math.Round((-12+percent*.24)*2) / 2
+			a.settings.GainEnabled = true
+		}
+		changed = true
+	}
+	if changed {
+		a.applyDSPAndSave()
+	}
 }
 
 func (a *app) updateRXEmphasis(mouse rl.Vector2) {
@@ -909,7 +985,11 @@ func (a *app) toggleActiveSection() {
 	case 3:
 		a.config.NoiseEnabled = !a.config.NoiseEnabled
 	case 4:
-		a.settings.GainEnabled = !a.settings.GainEnabled
+		if a.mode == "tx" {
+			a.config.Echo.Enabled = !a.config.Echo.Enabled
+		} else {
+			a.settings.GainEnabled = !a.settings.GainEnabled
+		}
 	}
 	a.applyDSPAndSave()
 }
@@ -928,6 +1008,9 @@ func (a *app) sectionEnabled(index int) bool {
 	case 3:
 		return a.config.NoiseEnabled
 	case 4:
+		if a.mode == "tx" {
+			return a.config.Echo.Enabled || a.settings.GainEnabled
+		}
 		return a.settings.GainEnabled
 	}
 	return false
@@ -1347,29 +1430,46 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 	labels := []string{"FILTROS", "ECUALIZADOR", "COMPRESOR", "REDUCCIÓN DE RUIDO", "GANANCIA"}
 	if a.mode == "rx" {
 		labels[2] = "NOTCH"
+	} else {
+		labels[4] = "EFECTOS"
 	}
 	for i, label := range labels {
 		r := rl.NewRectangle(float32(20+i*312), 590, 300, 56)
 		active := i == a.activeTab
 		fill := color.panel
-		if active {
-			fill = color.panel2
+		hovered := rl.CheckCollisionPointRec(mouse, r)
+		if hovered {
+			fill = rl.NewColor(20, 38, 52, 255)
 		}
-		rl.DrawRectangleRounded(r, .12, 6, fill)
+		if active {
+			fill = rl.NewColor(57, 45, 25, 255)
+			for glow := 5; glow >= 1; glow-- {
+				expand := float32(glow)
+				gr := rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2)
+				rl.DrawRectangleRounded(gr, .22, 10, rl.NewColor(color.amber.R, color.amber.G, color.amber.B, uint8(3+glow*3)))
+			}
+		}
+		rl.DrawRectangleRounded(r, .22, 10, fill)
+		border := color.border
+		if active {
+			border = color.amber
+		} else if hovered {
+			border = rl.NewColor(105, 128, 143, 255)
+		}
+		rl.DrawRectangleRoundedLines(r, .22, 10, border)
 		stateColor := color.muted
 		if a.sectionEnabled(i) {
 			stateColor = color.green
 		}
 		rl.DrawCircle(int32(r.X+20), int32(r.Y+r.Height/2), 6, stateColor)
 		if active {
-			rl.DrawRectangle(int32(r.X+10), int32(r.Y+r.Height-4), int32(r.Width-20), 4, color.amber)
+			rl.DrawRectangleRounded(rl.NewRectangle(r.X+12, r.Y+r.Height-6, r.Width-24, 5), 1, 5, color.amber)
 		}
 		c := color.text
 		if active {
 			c = color.amber
 		}
 		drawCentered(label, r, 20, c, 0)
-		_ = mouse
 	}
 }
 
@@ -1377,10 +1477,12 @@ func (a *app) drawDSPPanel() {
 	r := rl.NewRectangle(20, 650, 1560, 220)
 	rl.DrawRectangleRounded(r, .04, 8, color.panel)
 	rl.DrawRectangleRoundedLines(r, .04, 8, color.border)
-	if a.mode == "tx" {
+	if a.mode == "tx" && a.activeTab != 4 {
 		drawButton(rl.NewRectangle(1170, 665, 180, 46), "TONO 1 kHz", a.txSignal.enabled.Load())
 	}
-	drawSectionToggle(a.sectionEnabled(a.activeTab))
+	if !(a.mode == "tx" && a.activeTab == 4) {
+		drawSectionToggle(a.sectionEnabled(a.activeTab))
+	}
 	switch a.activeTab {
 	case 0:
 		a.drawFilters()
@@ -1395,7 +1497,11 @@ func (a *app) drawDSPPanel() {
 	case 3:
 		a.drawNoiseReduction()
 	case 4:
-		a.drawGain()
+		if a.mode == "tx" {
+			a.drawEffects()
+		} else {
+			a.drawGain()
+		}
 	}
 }
 
@@ -1496,6 +1602,53 @@ func (a *app) drawGain() {
 	drawText("GANANCIA DE SALIDA", 55, 680, 25, color.amber)
 	drawText("Calibra el nivel enviado a la entrada de audio USB de la radio", 55, 730, 20, color.muted)
 	drawValueSlider(percent, fmt.Sprintf("%+.1f dB", a.config.OutputGainDB), "-12 dB", "+12 dB")
+}
+
+func (a *app) drawEffects() {
+	drawText("ECO TX", 95, 672, 25, color.text)
+	box := rl.NewRectangle(55, 674, 28, 28)
+	boxFill, boxBorder := color.panel2, color.border
+	if a.config.Echo.Enabled {
+		boxFill, boxBorder = color.amber, color.amber
+	}
+	rl.DrawRectangleRounded(box, .22, 6, boxFill)
+	rl.DrawRectangleRoundedLines(box, .22, 6, boxBorder)
+	if a.config.Echo.Enabled {
+		drawText("✓", 59, 673, 22, color.bg)
+	}
+	drawEffectTrack(714, "RETARDO", fmt.Sprintf("%.0f ms", a.config.Echo.DelayMS), (a.config.Echo.DelayMS-40)/460*100, 365, 775)
+	drawEffectTrack(754, "REALIMENTACIÓN", fmt.Sprintf("%.0f %%", a.config.Echo.Feedback), a.config.Echo.Feedback/70*100, 365, 775)
+	drawEffectTrack(794, "MEZCLA", fmt.Sprintf("%.0f %%", a.config.Echo.MixPercent), a.config.Echo.MixPercent/50*100, 365, 775)
+
+	toneLabels := []string{"OSCURO", "NEUTRO", "BRILLANTE"}
+	tones := []audio.EchoTone{audio.EchoDark, audio.EchoNeutral, audio.EchoBright}
+	for i, label := range toneLabels {
+		drawButton(rl.NewRectangle(float32(95+i*165), 826, 150, 36), label, a.config.Echo.Tone == tones[i])
+	}
+	rl.DrawLine(625, 826, 625, 862, color.border)
+	for i, label := range []string{"CORTO", "MEDIO", "LARGO"} {
+		drawButton(rl.NewRectangle(float32(690+i*155), 826, 140, 36), label, false)
+	}
+
+	rl.DrawLine(1200, 670, 1200, 855, color.border)
+	drawText("GANANCIA", 1240, 682, 23, color.text)
+	drawText(fmt.Sprintf("%+.1f dB", a.config.OutputGainDB), 1325, 730, 34, color.amber)
+	percent := (a.config.OutputGainDB + 12) / 24 * 100
+	drawEffectTrack(800, "", "", percent, 1260, 250)
+}
+
+func drawEffectTrack(y float32, label, value string, percent float64, x, width float32) {
+	percent = max(0, min(100, percent))
+	if label != "" {
+		drawText(label, 95, int32(y-7), 18, color.text)
+		drawText(value, 260, int32(y-7), 18, color.muted)
+	}
+	track := rl.NewRectangle(x, y+7, width, 10)
+	rl.DrawRectangleRounded(track, .5, 8, rl.NewColor(46, 65, 77, 255))
+	rl.DrawRectangleRounded(rl.NewRectangle(track.X, track.Y, track.Width*float32(percent/100), track.Height), .5, 8, color.amber)
+	handleX := track.X + track.Width*float32(percent/100)
+	rl.DrawCircle(int32(handleX), int32(track.Y+track.Height/2), 10, color.text)
+	rl.DrawCircle(int32(handleX), int32(track.Y+track.Height/2), 6, color.amber)
 }
 
 func drawValueSlider(percent float64, value, left, right string) {
@@ -1752,6 +1905,9 @@ func (a *app) load() {
 		if a.settings.Version < 5 || (a.settings.RXEmphasisMode != "ssb" && a.settings.RXEmphasisMode != "fm50" && a.settings.RXEmphasisMode != "fm75") {
 			a.settings.RXEmphasis, a.settings.RXEmphasisMode, a.settings.RXEmphasisMix = false, "ssb", 50
 		}
+		if a.settings.Version < 8 {
+			a.config.Echo = audio.DefaultConfig().Echo
+		}
 	}
 }
 
@@ -1781,7 +1937,7 @@ func (a *app) save() {
 			a.settings.RXOutput = a.rxView.outputs[a.rxView.outIndex].Name
 		}
 	}
-	a.settings.Version = 7
+	a.settings.Version = 8
 	path := settingsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return

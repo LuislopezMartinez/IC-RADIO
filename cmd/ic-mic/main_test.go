@@ -139,3 +139,26 @@ func TestMeterGradientCoversFullSignalRange(t *testing.T) {
 		t.Fatalf("el final del medidor no es rojo: %+v", high)
 	}
 }
+
+func TestTXEchoProducesDelayedSignal(t *testing.T) {
+	energyAfterDelay := func(enabled bool) float64 {
+		processor := audio.NewProcessor(audio.DefaultSampleRate)
+		config := audio.DefaultConfig()
+		config.LowCutHz, config.HighCutHz = 20, 10000
+		config.EQEnabled, config.NoiseEnabled, config.Compressor.Enabled = false, false, false
+		config.Echo = audio.EchoConfig{Enabled: enabled, DelayMS: 40, Feedback: 0, MixPercent: 50, Tone: audio.EchoNeutral}
+		processor.Configure(config)
+		samples := make([]float32, 4000)
+		samples[0] = 1
+		processor.Process(samples)
+		energy := 0.0
+		for _, sample := range samples[1850:2100] {
+			energy += float64(sample * sample)
+		}
+		return energy
+	}
+	withoutEcho, withEcho := energyAfterDelay(false), energyAfterDelay(true)
+	if withEcho < withoutEcho*10 || withEcho < 1e-5 {
+		t.Fatalf("el eco no produjo una repetición clara: sin=%g con=%g", withoutEcho, withEcho)
+	}
+}

@@ -20,6 +20,9 @@ type Processor struct {
 	blankerPrevious, blankerPrevious2, blankerErrorEnvelope  float64
 	blankerRemaining                                         int
 	ssbClarityLowpass, ssbClarityCurrent                     float64
+	echoBuffer                                               []float64
+	echoWrite                                                int
+	echoToneLowpass                                          float64
 	beforeNotch, output                                      *Spectrum
 	preScratch, dryScratch                                   []float32
 }
@@ -28,7 +31,7 @@ func NewProcessor(sampleRate float64) *Processor {
 	if sampleRate <= 0 {
 		sampleRate = DefaultSampleRate
 	}
-	p := &Processor{sampleRate: sampleRate, config: DefaultConfig(), limiterGain: 1, compressorGain: 1, beforeNotch: NewSpectrum(sampleRate), output: NewSpectrum(sampleRate)}
+	p := &Processor{sampleRate: sampleRate, config: DefaultConfig(), limiterGain: 1, compressorGain: 1, beforeNotch: NewSpectrum(sampleRate), output: NewSpectrum(sampleRate), echoBuffer: make([]float64, int(sampleRate))}
 	p.noise = newNoiseReducer(sampleRate)
 	p.Configure(p.config)
 	return p
@@ -52,6 +55,16 @@ func (p *Processor) Configure(c Config) {
 	c.Compressor.TargetDBFS = clamp(c.Compressor.TargetDBFS, -30, -6)
 	if c.EmphasisMicroseconds != 75 {
 		c.EmphasisMicroseconds = 50
+	}
+	c.Echo.DelayMS = clamp(c.Echo.DelayMS, 40, 500)
+	c.Echo.Feedback = clamp(c.Echo.Feedback, 0, 70)
+	c.Echo.MixPercent = clamp(c.Echo.MixPercent, 0, 50)
+	if c.Echo.Tone != EchoDark && c.Echo.Tone != EchoBright {
+		c.Echo.Tone = EchoNeutral
+	}
+	if c.Echo.Enabled != p.config.Echo.Enabled {
+		clear(p.echoBuffer)
+		p.echoWrite, p.echoToneLowpass = 0, 0
 	}
 	p.config = c
 	for i := range p.eq {
@@ -149,6 +162,28 @@ func (p *Processor) Process(samples []float32) {
 			v *= p.compressorGain
 		} else {
 			p.compressorEnvelope, p.compressorGain, p.compressorGainDB = 0, 1, 0
+		}
+		if p.config.Echo.Enabled && len(p.echoBuffer) > 0 {
+			delaySamples := max(1, min(len(p.echoBuffer)-1, int(p.config.Echo.DelayMS*p.sampleRate/1000)))
+			read := p.echoWrite - delaySamples
+			if read < 0 {
+				read += len(p.echoBuffer)
+			}
+			wet := p.echoBuffer[read]
+			cutoff := 3200.0
+			if p.config.Echo.Tone == EchoDark {
+				cutoff = 1500
+			} else if p.config.Echo.Tone == EchoBright {
+				cutoff = 6000
+			}
+			toneAlpha := 1 - math.Exp(-2*math.Pi*cutoff/p.sampleRate)
+			p.echoToneLowpass += toneAlpha * (wet - p.echoToneLowpass)
+			wet = p.echoToneLowpass
+			feedback := p.config.Echo.Feedback / 100
+			p.echoBuffer[p.echoWrite] = clamp(v+wet*feedback, -1.5, 1.5)
+			p.echoWrite = (p.echoWrite + 1) % len(p.echoBuffer)
+			echoMix := p.config.Echo.MixPercent / 100
+			v = v*(1-echoMix) + wet*echoMix
 		}
 		v = (float64(dry[i])*dryGain + v*processedGain) * outputGain
 		if math.IsNaN(v) || math.IsInf(v, 0) {
