@@ -4,6 +4,8 @@ Consola de audio RX/TX para transceptores con interfaz USB, procesamiento DSP
 en tiempo real y control PTT mediante RTS o DTR. Permite utilizar un micrófono
 USB externo, procesar la voz y enviarla a la entrada de audio USB de la radio.
 
+![Interfaz de IC-RADIO](assets/screenshots/ic-radio-interface.png)
+
 ## Funciones
 
 - Rutas independientes de recepción y transmisión.
