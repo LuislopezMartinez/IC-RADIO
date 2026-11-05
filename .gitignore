@@ -1,0 +1,5 @@
+ic-mic.exe
+ic-radio.exe
+settings.json
+*.log
+dist/
