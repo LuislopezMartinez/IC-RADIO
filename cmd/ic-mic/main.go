@@ -807,6 +807,10 @@ func (a *app) updateEQ(mouse rl.Vector2) {
 		a.config.EQGainsDB = [audio.EQBandCount]float64{}
 		a.applyDSPAndSave()
 	}
+	if clicked(mouse, rl.NewRectangle(1390, 820, 150, 44)) {
+		a.config.EQEnabled = !a.config.EQEnabled
+		a.applyDSPAndSave()
+	}
 }
 
 func (a *app) updatePanelControls(mouse rl.Vector2) {
@@ -1567,6 +1571,7 @@ func (a *app) drawEQ() {
 	drawText("Ecualización de voz", 1230, 750, 20, color.text)
 	drawText("-12 a +12 dB", 1230, 785, 18, color.muted)
 	drawButton(rl.NewRectangle(1230, 820, 150, 44), "RESET EQ", false)
+	drawButton(rl.NewRectangle(1390, 820, 150, 44), "BYPASS", !a.config.EQEnabled)
 }
 
 func (a *app) drawCompressor() {
