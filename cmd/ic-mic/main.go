@@ -30,8 +30,8 @@ const (
 var color = struct {
 	bg, panel, panel2, border, text, muted, cyan, green, amber, red rl.Color
 }{
-	rl.NewColor(8, 16, 25, 255), rl.NewColor(14, 27, 39, 255), rl.NewColor(19, 35, 49, 255),
-	rl.NewColor(72, 94, 111, 255), rl.NewColor(241, 244, 247, 255), rl.NewColor(166, 180, 191, 255),
+	rl.NewColor(166, 170, 171, 255), rl.NewColor(8, 19, 24, 255), rl.NewColor(18, 28, 33, 255),
+	rl.NewColor(89, 99, 102, 255), rl.NewColor(246, 248, 248, 255), rl.NewColor(181, 190, 192, 255),
 	rl.NewColor(16, 218, 236, 255), rl.NewColor(54, 230, 119, 255), rl.NewColor(255, 190, 40, 255), rl.NewColor(235, 25, 39, 255),
 }
 
@@ -238,7 +238,7 @@ func main() {
 		destination := destinationRect()
 		camera := rl.NewCamera2D(rl.NewVector2(destination.X, destination.Y), rl.Vector2{}, 0, destination.Width/viewW)
 		rl.BeginMode2D(camera)
-		rl.DrawRectangle(0, 0, viewW, viewH, color.bg)
+		drawRackChassis()
 		a.draw(mouse)
 		rl.EndMode2D()
 		rl.EndDrawing()
@@ -1101,15 +1101,17 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 }
 
 func drawHeader(a *app, status audioio.Status) {
-	drawMilitaryText("IC-RADIO", 30, 18, 42, color.text)
+	drawMilitaryText("IC-RADIO", 38, 18, 42, rl.NewColor(18, 23, 25, 255))
 	connected := a.ptt.Connected()
 	dot := color.amber
 	state := "PTT SIN CONECTAR"
 	if connected {
 		dot, state = color.green, "RADIO CONECTADA"
 	}
-	rl.DrawCircle(335, 45, 9, dot)
-	drawText(state, 355, 30, 21, color.amber)
+	drawDarkDisplay(rl.NewRectangle(325, 18, 300, 54))
+	rl.DrawCircle(350, 45, 10, rl.NewColor(dot.R/4, dot.G/4, dot.B/4, 255))
+	rl.DrawCircle(350, 45, 7, dot)
+	drawText(state, 372, 30, 21, color.amber)
 	drawButton(rl.NewRectangle(650, 22, 100, 48), "RX", a.mode == "rx")
 	drawButton(rl.NewRectangle(760, 22, 100, 48), "TX", a.mode == "tx")
 	portName := "SELECCIONAR COM"
@@ -1140,20 +1142,25 @@ func (a *app) drawRXPanel(status audioio.Status) {
 
 func drawSelector(x, y, w float32, label, value string, mouse rl.Vector2) {
 	r := rl.NewRectangle(x, y, w, 64)
-	fill := color.panel2
-	if rl.CheckCollisionPointRec(mouse, r) {
-		fill = rl.NewColor(25, 48, 65, 255)
+	labelWidth := float32(245)
+	if strings.Contains(label, "ENTRADA DESDE") || strings.Contains(label, "SALIDA A EMISORA") {
+		labelWidth = 285
 	}
-	rl.DrawRectangleRounded(r, .14, 8, fill)
-	rl.DrawRectangleRoundedLines(r, .14, 8, color.border)
-	drawText(label, int32(x+22), int32(y+10), 18, color.muted)
-	drawText(ellipsis(value, 42), int32(x+210), int32(y+17), 25, color.text)
-	drawText("⌄", int32(x+w-42), int32(y+14), 28, color.text)
+	// The label belongs to the metal faceplate; only the selected device sits in
+	// the dark glass display, as it would on physical rack hardware.
+	drawText(label, int32(x+18), int32(y+18), 23, rl.NewColor(27, 31, 32, 255))
+	field := rl.NewRectangle(x+labelWidth, y+5, w-labelWidth-8, 54)
+	drawDarkDisplay(field)
+	if rl.CheckCollisionPointRec(mouse, r) {
+		rl.DrawRectangleRoundedLines(rl.NewRectangle(field.X-2, field.Y-2, field.Width+4, field.Height+4), .18, 8, rl.NewColor(126, 224, 230, 175))
+	}
+	drawText(ellipsis(value, 34), int32(field.X+22), int32(field.Y+13), 23, color.text)
+	drawText("⌄", int32(field.X+field.Width-42), int32(field.Y+10), 28, color.text)
 }
 
 func (a *app) drawSpectrum(x, y, w, h float32) {
 	r := rl.NewRectangle(x, y, w, h)
-	rl.DrawRectangleRounded(r, .04, 8, color.panel)
+	drawInsetPanel(r, .04)
 	for i := 0; i <= 8; i++ {
 		xx := x + 68 + float32(i)*(w-86)/8
 		rl.DrawLine(int32(xx), int32(y+18), int32(xx), int32(y+h-22), rl.NewColor(24, 60, 78, 255))
@@ -1267,8 +1274,7 @@ func drawMonitorButton(r rl.Rectangle, enabled bool) {
 
 func drawMeter(x, y, w, h float32, label string, db float32) {
 	r := rl.NewRectangle(x, y, w, h)
-	rl.DrawRectangleRounded(r, .09, 8, color.panel)
-	rl.DrawRectangleRoundedLines(r, .09, 8, color.border)
+	drawInsetPanel(r, .09)
 	drawText(label, int32(x+25), int32(y+22), 28, color.text)
 	bar := rl.NewRectangle(x+25, y+88, w-50, 46)
 	rl.DrawRectangleRounded(bar, .15, 6, rl.NewColor(8, 15, 22, 255))
@@ -1440,7 +1446,7 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 	for i, label := range labels {
 		r := rl.NewRectangle(float32(20+i*312), 590, 300, 56)
 		active := i == a.activeTab
-		fill := color.panel
+		fill := rl.NewColor(27, 31, 32, 255)
 		hovered := rl.CheckCollisionPointRec(mouse, r)
 		if hovered {
 			fill = rl.NewColor(20, 38, 52, 255)
@@ -1453,7 +1459,9 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 				rl.DrawRectangleRounded(gr, .22, 10, rl.NewColor(color.amber.R, color.amber.G, color.amber.B, uint8(3+glow*3)))
 			}
 		}
+		rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+5, r.Width, r.Height), .22, 10, rl.NewColor(5, 7, 8, 190))
 		rl.DrawRectangleRounded(r, .22, 10, fill)
+		rl.DrawLineEx(rl.NewVector2(r.X+18, r.Y+4), rl.NewVector2(r.X+r.Width-18, r.Y+4), 2, rl.NewColor(155, 160, 160, 90))
 		border := color.border
 		if active {
 			border = color.amber
@@ -1479,8 +1487,7 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 
 func (a *app) drawDSPPanel() {
 	r := rl.NewRectangle(20, 650, 1560, 220)
-	rl.DrawRectangleRounded(r, .04, 8, color.panel)
-	rl.DrawRectangleRoundedLines(r, .04, 8, color.border)
+	drawInsetPanel(r, .04)
 	if a.mode == "tx" && a.activeTab != 4 {
 		drawButton(rl.NewRectangle(1170, 665, 180, 46), "TONO 1 kHz", a.txSignal.enabled.Load())
 	}
@@ -1698,7 +1705,9 @@ func drawButton(r rl.Rectangle, label string, active bool) {
 			rl.DrawRectangleRounded(glowRect, .18, 8, rl.NewColor(color.amber.R, color.amber.G, color.amber.B, uint8(6+glow*6)))
 		}
 	}
+	rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+4, r.Width, r.Height), .18, 6, rl.NewColor(3, 5, 6, 180))
 	rl.DrawRectangleRounded(r, .18, 6, fill)
+	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+3), rl.NewVector2(r.X+r.Width-10, r.Y+3), 2, rl.NewColor(190, 196, 197, 80))
 	rl.DrawRectangleRoundedLines(r, .18, 6, border)
 	if active {
 		rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), .18, 6, rl.NewColor(255, 211, 91, 150))
@@ -1818,6 +1827,47 @@ func ellipsis(s string, limit int) string {
 func mix(a, b rl.Color, amount float32) rl.Color {
 	f := func(x, y uint8) uint8 { return uint8(float32(x) + (float32(y)-float32(x))*amount) }
 	return rl.NewColor(f(a.R, b.R), f(a.G, b.G), f(a.B, b.B), 255)
+}
+
+func drawRackChassis() {
+	rl.DrawRectangleGradientV(0, 0, viewW, viewH, rl.NewColor(211, 214, 214, 255), rl.NewColor(137, 142, 144, 255))
+	for y := int32(1); y < viewH; y += 3 {
+		shade := uint8(18 + (y%11)*2)
+		rl.DrawLine(0, y, viewW, y, rl.NewColor(255, 255, 255, shade))
+	}
+	for y := int32(2); y < viewH; y += 7 {
+		rl.DrawLine(0, y, viewW, y, rl.NewColor(45, 49, 50, 18))
+	}
+	rl.DrawRectangleGradientH(0, 0, 24, viewH, rl.NewColor(92, 97, 99, 255), rl.NewColor(182, 186, 186, 255))
+	rl.DrawRectangleGradientH(viewW-24, 0, 24, viewH, rl.NewColor(182, 186, 186, 255), rl.NewColor(89, 94, 96, 255))
+	rl.DrawRectangleLinesEx(rl.NewRectangle(3, 3, viewW-6, viewH-6), 3, rl.NewColor(68, 73, 75, 255))
+	rl.DrawLine(24, 0, 24, viewH, rl.NewColor(65, 70, 72, 190))
+	rl.DrawLine(viewW-25, 0, viewW-25, viewH, rl.NewColor(238, 240, 240, 170))
+	for _, p := range []rl.Vector2{{X: 14, Y: 42}, {X: viewW - 14, Y: 42}, {X: 14, Y: viewH - 42}, {X: viewW - 14, Y: viewH - 42}} {
+		drawRackScrew(p.X, p.Y)
+	}
+}
+
+func drawRackScrew(x, y float32) {
+	rl.DrawCircle(int32(x+2), int32(y+3), 13, rl.NewColor(45, 47, 47, 110))
+	rl.DrawCircleGradient(rl.NewVector2(x, y), 12, rl.NewColor(74, 78, 79, 255), rl.NewColor(8, 10, 11, 255))
+	rl.DrawCircleLines(int32(x), int32(y), 12, rl.NewColor(212, 215, 214, 180))
+	rl.DrawLineEx(rl.NewVector2(x-6, y-6), rl.NewVector2(x+6, y+6), 3, rl.NewColor(5, 6, 7, 255))
+}
+
+func drawDarkDisplay(r rl.Rectangle) {
+	rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+4, r.Width, r.Height), .18, 8, rl.NewColor(25, 27, 28, 150))
+	rl.DrawRectangleRounded(r, .18, 8, rl.NewColor(8, 15, 18, 255))
+	rl.DrawRectangleRoundedLines(r, .18, 8, rl.NewColor(48, 53, 55, 255))
+	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), .18, 8, rl.NewColor(185, 193, 194, 100))
+	rl.DrawLineEx(rl.NewVector2(r.X+12, r.Y+5), rl.NewVector2(r.X+r.Width-12, r.Y+5), 2, rl.NewColor(222, 231, 231, 65))
+}
+
+func drawInsetPanel(r rl.Rectangle, roundness float32) {
+	rl.DrawRectangleRounded(rl.NewRectangle(r.X-3, r.Y-3, r.Width+6, r.Height+8), roundness, 8, rl.NewColor(65, 69, 70, 160))
+	rl.DrawRectangleRounded(r, roundness, 8, color.panel)
+	rl.DrawRectangleRoundedLines(r, roundness, 8, rl.NewColor(42, 49, 52, 255))
+	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), roundness, 8, rl.NewColor(130, 141, 143, 90))
 }
 
 func (a *app) shortcutLabel() string {

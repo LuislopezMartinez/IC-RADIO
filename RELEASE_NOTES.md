@@ -1,17 +1,21 @@
-# IC-RADIO v0.1.0
+# IC-RADIO v0.2.0
 
-Primera versión pública para Windows x64.
+Actualización principal para Windows x64 centrada en el procesamiento TX, la
+legibilidad y una presentación más cercana a un procesador físico de rack.
 
-## Incluye
+## Novedades
 
-- Consola combinada RX/TX para transceptores con audio USB.
-- Procesamiento DSP independiente para recepción y transmisión.
-- Filtros, ecualizador, notch RX, compresor TX y reducción de ruido.
-- Énfasis SSB y deénfasis FM de 50/75 µs.
-- Monitorización en auriculares de la señal TX procesada mediante `MON`.
-- PTT mediante RTS o DTR, atajo configurable y retorno seguro a RX.
+- Nueva interfaz de aluminio cepillado inspirada en procesadores enracables.
+- Selectores de audio desplegables con etiquetas y dispositivo claramente separados.
+- Eco TX con retardo, realimentación, mezcla, perfiles rápidos y tonos oscuro,
+  neutro y brillante ahora perceptiblemente diferenciados para audio de radio.
+- Botón de bypass y restablecimiento independiente del ecualizador.
+- Pestañas y botones activos con iluminación ámbar y mayor profundidad visual.
+- Medidores con gradiente continuo y monitor `MON` para la señal TX procesada.
+- Interfaz combinada RX/TX, notch RX gráfico, énfasis SSB y deénfasis FM.
 - Persistencia completa e independiente de los parámetros RX y TX.
-- Selector desplegable de dispositivos y espectro en tiempo real.
+- Corrección del proceso de compilación para garantizar la detección de los
+  dispositivos de audio reales mediante CGO/Miniaudio.
 
 ## Descarga
 

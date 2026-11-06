@@ -22,7 +22,7 @@ type Processor struct {
 	ssbClarityLowpass, ssbClarityCurrent                     float64
 	echoBuffer                                               []float64
 	echoWrite                                                int
-	echoToneLowpass                                          float64
+	echoToneLowpass, echoPresenceLowpass                     float64
 	beforeNotch, output                                      *Spectrum
 	preScratch, dryScratch                                   []float32
 }
@@ -64,7 +64,7 @@ func (p *Processor) Configure(c Config) {
 	}
 	if c.Echo.Enabled != p.config.Echo.Enabled {
 		clear(p.echoBuffer)
-		p.echoWrite, p.echoToneLowpass = 0, 0
+		p.echoWrite, p.echoToneLowpass, p.echoPresenceLowpass = 0, 0, 0
 	}
 	p.config = c
 	for i := range p.eq {
@@ -169,16 +169,26 @@ func (p *Processor) Process(samples []float32) {
 			if read < 0 {
 				read += len(p.echoBuffer)
 			}
-			wet := p.echoBuffer[read]
-			cutoff := 3200.0
+			rawWet := p.echoBuffer[read]
+			cutoff := 2500.0
 			if p.config.Echo.Tone == EchoDark {
-				cutoff = 1500
+				cutoff = 1100
 			} else if p.config.Echo.Tone == EchoBright {
-				cutoff = 6000
+				cutoff = 3900
 			}
 			toneAlpha := 1 - math.Exp(-2*math.Pi*cutoff/p.sampleRate)
-			p.echoToneLowpass += toneAlpha * (wet - p.echoToneLowpass)
-			wet = p.echoToneLowpass
+			p.echoToneLowpass += toneAlpha * (rawWet - p.echoToneLowpass)
+			wet := p.echoToneLowpass
+			if p.config.Echo.Tone == EchoBright {
+				// Lift the intelligibility band of the repeats without extending it
+				// beyond a typical radio passband. The added band is approximately
+				// 1.8–3.9 kHz, so Bright remains audible on SSB/FM equipment.
+				presenceAlpha := 1 - math.Exp(-2*math.Pi*1800/p.sampleRate)
+				p.echoPresenceLowpass += presenceAlpha * (rawWet - p.echoPresenceLowpass)
+				wet += .35 * (wet - p.echoPresenceLowpass)
+			} else {
+				p.echoPresenceLowpass = wet
+			}
 			feedback := p.config.Echo.Feedback / 100
 			p.echoBuffer[p.echoWrite] = clamp(v+wet*feedback, -1.5, 1.5)
 			p.echoWrite = (p.echoWrite + 1) % len(p.echoBuffer)

@@ -51,6 +51,31 @@ func TestTXCalibrationToneProducesAudio(t *testing.T) {
 	}
 }
 
+func TestEchoToneProfilesAreAudiblySeparated(t *testing.T) {
+	rms := func(tone audio.EchoTone) float64 {
+		processor := audio.NewProcessor(audio.DefaultSampleRate)
+		config := audio.DefaultConfig()
+		config.LowCutHz, config.HighCutHz = 20, 10000
+		config.EQEnabled = false
+		config.Echo = audio.EchoConfig{Enabled: true, DelayMS: 40, MixPercent: 50, Tone: tone}
+		processor.Configure(config)
+		samples := make([]float32, 4800)
+		for i := 0; i < 960; i++ {
+			samples[i] = float32(.4 * math.Sin(2*math.Pi*3000*float64(i)/audio.DefaultSampleRate))
+		}
+		processor.Process(samples)
+		var energy float64
+		for _, sample := range samples[1920:2880] {
+			energy += float64(sample * sample)
+		}
+		return math.Sqrt(energy / 960)
+	}
+	dark, neutral, bright := rms(audio.EchoDark), rms(audio.EchoNeutral), rms(audio.EchoBright)
+	if !(dark < neutral*.75 && bright > neutral*1.15) {
+		t.Fatalf("perfiles de eco poco separados a 3 kHz: oscuro=%.4f neutro=%.4f brillante=%.4f", dark, neutral, bright)
+	}
+}
+
 func TestEscapeCannotBeBound(t *testing.T) {
 	if validBindingKey(rl.KeyEscape) {
 		t.Fatal("Escape debe permanecer reservado para RX de emergencia")
