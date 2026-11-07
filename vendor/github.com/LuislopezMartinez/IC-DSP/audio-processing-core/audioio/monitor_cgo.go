@@ -67,6 +67,19 @@ func (m *PlaybackMonitor) Start(outputIndex int) error {
 }
 
 func (m *PlaybackMonitor) StartNamed(name string) error {
+	// Playback endpoints can change while the application is running (for
+	// example, when headphones are connected). The monitor used to retain only
+	// the list captured at startup, so a newly selected Windows default endpoint
+	// could never be found here.
+	m.Stop()
+	if m.context == nil {
+		return fmt.Errorf("motor de monitor cerrado")
+	}
+	outputs, err := m.context.Devices(malgo.Playback)
+	if err != nil {
+		return fmt.Errorf("actualizar salidas de monitor: %w", err)
+	}
+	m.outputs = outputs
 	for i := range m.outputs {
 		if m.outputs[i].Name() == name {
 			return m.Start(i)

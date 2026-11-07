@@ -1,31 +1,24 @@
-# IC-RADIO v0.3.0
+# IC-RADIO v0.4.0
 
-Nueva versión para Windows x64 centrada en la seguridad del audio, el control
-de transmisión y una interfaz más clara y precisa.
+Nueva versión para Windows x64 centrada en un control de transmisión más
+directo, una distribución TX más compacta y un monitor de audio más robusto.
 
 ## Novedades
 
-- El programa ya no modifica ni fuerza al 100 % el volumen de salida de
-  Windows al iniciarse, recompilarse o cambiar de dispositivo.
-- Nuevo interruptor `ON TOP` para mantener la consola siempre en primer plano.
-- Espectro rediseñado desde 100 Hz, con más barras, mayor definición, mejor
-  lectura de agudos y estética cibernética en cian, verde y ámbar.
-- Ecualizador gráfico renovado, con mejor contraste, escala contenida dentro
-  del panel y respuesta de agudos mejorada.
-- Nueva distribución de la pestaña Filtros TX.
-- Generador de tono TX ajustable entre 0 y 5 kHz.
-- Nuevo `FADE ON PTT` configurable entre 0 y 3000 ms para abrir el audio de
-  forma progresiva al comenzar la transmisión.
-- Controles de paso de banda, presencia TX y estados activos reorganizados
-  para una lectura más rápida.
-- Paneles, sliders y estados activos con mayor contraste sobre el acabado de
-  aluminio.
-- Script `compilar-radio.cmd` ejecutable con doble clic desde el Explorador de
-  Windows.
+- Nuevo control de ganancia TX permanente bajo el PTT, disponible desde todas
+  las pestañas de transmisión.
+- PTT más compacto para separar claramente la transmisión del ajuste de nivel.
+- La ganancia TX conserva su valor y puede ajustarse sin abandonar la sección
+  DSP que se esté utilizando.
+- Panel de eco TX redistribuido para aprovechar mejor el espacio disponible.
+- El monitor `MON` vuelve a enumerar las salidas de audio antes de abrirlas,
+  permitiendo reconocer cambios recientes en el dispositivo de Windows.
+- Ecualizador documentado correctamente como 11 bandas hasta 10 kHz, con
+  restablecimiento y bypass.
 
 ## Descarga
 
-Descarga `IC-RADIO-Windows-x64-v0.3.0.zip`, extrae el archivo y ejecuta
+Descarga `IC-RADIO-Windows-x64-v0.4.0.zip`, extrae el archivo y ejecuta
 `ic-radio.exe`. El binario no está firmado digitalmente, por lo que Windows
 puede solicitar confirmación la primera vez.
 

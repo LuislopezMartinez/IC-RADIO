@@ -187,6 +187,7 @@ type app struct {
 	controlDrag             int
 	notchDrag               int
 	echoDrag                int
+	txGainDrag              bool
 	pttSettingsOpen         bool
 	capturingPTTKey         bool
 	keyPTTActive            bool
@@ -596,6 +597,7 @@ func (a *app) update(mouse rl.Vector2) {
 		a.controlDrag = -1
 		a.notchDrag = -1
 		a.echoDrag = -1
+		a.txGainDrag = false
 	}
 	if clicked(mouse, rl.NewRectangle(650, 22, 100, 48)) {
 		a.switchMode("rx")
@@ -648,7 +650,7 @@ func (a *app) update(mouse rl.Vector2) {
 		a.pttSettingsOpen = true
 		a.capturingPTTKey = false
 	}
-	pttRect := rl.NewRectangle(530, 385, 540, 185)
+	pttRect := pttRectangle()
 	if a.mode == "tx" && a.settings.PTTMode == "hold" {
 		if rl.IsMouseButtonPressed(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, pttRect) {
 			a.mousePTTActive = a.setTX(true)
@@ -669,15 +671,7 @@ func (a *app) update(mouse rl.Vector2) {
 	a.updateNotchFromSpectrum(mouse)
 	a.updateRXEmphasis(mouse)
 	a.updateTXFilterControls(mouse)
-	if a.mode == "tx" && a.activeTab != 0 && clicked(mouse, toneButtonRectangle(a.activeTab)) {
-		enabled := !a.txSignal.enabled.Load()
-		a.txSignal.enabled.Store(enabled)
-		if enabled {
-			a.message = "Tono de prueba TX: 1 kHz a -20 dBFS"
-		} else {
-			a.message = "Tono de prueba desactivado"
-		}
-	}
+	a.updatePersistentTXGain(mouse)
 	if a.mode == "tx" && clicked(mouse, rl.NewRectangle(1460, 403, 82, 40)) {
 		a.toggleOutputMonitor()
 	}
@@ -1047,7 +1041,7 @@ func (a *app) updatePanelControls(mouse rl.Vector2) {
 
 func (a *app) updateEchoControls(mouse rl.Vector2) {
 	changed := false
-	if clicked(mouse, rl.NewRectangle(55, 672, 170, 38)) {
+	if clicked(mouse, rl.NewRectangle(55, 650, 170, 38)) {
 		a.config.Echo.Enabled = !a.config.Echo.Enabled
 		changed = true
 	}
@@ -1081,7 +1075,6 @@ func (a *app) updateEchoControls(mouse rl.Vector2) {
 		rl.NewRectangle(365, 700, 775, 24),
 		rl.NewRectangle(365, 738, 775, 24),
 		rl.NewRectangle(365, 776, 775, 24),
-		rl.NewRectangle(1260, 780, 250, 28),
 	}
 	if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
 		for i, track := range tracks {
@@ -1104,15 +1097,29 @@ func (a *app) updateEchoControls(mouse rl.Vector2) {
 		case 2:
 			a.config.Echo.MixPercent = math.Round(percent * .5)
 			a.config.Echo.Enabled = true
-		case 3:
-			a.config.OutputGainDB = math.Round((-12+percent*.24)*2) / 2
-			a.settings.GainEnabled = true
 		}
 		changed = true
 	}
 	if changed {
 		a.applyDSPAndSave()
 	}
+}
+
+func (a *app) updatePersistentTXGain(mouse rl.Vector2) {
+	if a.mode != "tx" {
+		return
+	}
+	track := txGainTrackRectangle()
+	if rl.IsMouseButtonPressed(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, rl.NewRectangle(track.X-12, track.Y-12, track.Width+24, track.Height+24)) {
+		a.txGainDrag = true
+	}
+	if !a.txGainDrag || !rl.IsMouseButtonDown(rl.MouseLeftButton) {
+		return
+	}
+	percent := max(0.0, min(100.0, float64((mouse.X-track.X)/track.Width*100)))
+	a.config.OutputGainDB = math.Round((-12+percent*.24)*2) / 2
+	a.settings.GainEnabled = true
+	a.applyDSPAndSave()
 }
 
 func (a *app) updateRXEmphasis(mouse rl.Vector2) {
@@ -1286,6 +1293,7 @@ func (a *app) draw(mouse rl.Vector2) {
 	a.drawMeters(status)
 	if a.mode == "tx" {
 		a.drawPTT(mouse)
+		a.drawPersistentTXGain()
 	} else {
 		a.drawRXPanel(status)
 	}
@@ -1661,7 +1669,7 @@ func meterGradient(position float32) rl.Color {
 }
 
 func (a *app) drawPTT(mouse rl.Vector2) {
-	r := rl.NewRectangle(530, 385, 540, 185)
+	r := pttRectangle()
 	tx := a.ptt.TX()
 	fill := rl.NewColor(25, 47, 62, 255)
 	outline := color.cyan
@@ -1686,17 +1694,26 @@ func (a *app) drawPTT(mouse rl.Vector2) {
 	if tx {
 		mainText, sub = "TX", "PULSAR PARA VOLVER A RX"
 	}
-	drawMilitaryCentered(mainText, r, 84, color.text, -34)
-	drawCentered(sub, r, 23, color.text, 42)
+	drawMilitaryCentered(mainText, r, 70, color.text, -27)
+	drawCentered(sub, r, 20, color.text, 25)
 	if tx {
-		drawCentered(time.Since(a.txSince).Truncate(time.Second).String(), r, 27, color.text, 82)
+		drawCentered(time.Since(a.txSince).Truncate(time.Second).String(), r, 20, color.text, 51)
 	} else {
 		mode := "MANTENER"
 		if a.settings.PTTMode == "lock" {
 			mode = "PTT LOCK"
 		}
-		drawCentered(a.radioStateLabel()+" · "+mode+" · "+ellipsis(a.shortcutLabel(), 18), r, 17, color.muted, 82)
+		drawCentered(a.radioStateLabel()+" · "+mode+" · "+ellipsis(a.shortcutLabel(), 18), r, 15, color.muted, 51)
 	}
+}
+
+func (a *app) drawPersistentTXGain() {
+	r := txGainPanelRectangle()
+	percent := (a.config.OutputGainDB + 12) / 24 * 100
+	drawRecessedControlWell(r, false)
+	drawText("GANANCIA TX", int32(r.X+18), int32(r.Y+15), 17, dspColor.text)
+	drawMechanicalSlider(txGainTrackRectangle(), percent, controlColor.active)
+	drawText(fmt.Sprintf("%+.1f dB", a.config.OutputGainDB), int32(r.X+r.Width-88), int32(r.Y+14), 18, dspColor.amber)
 }
 
 func (a *app) radioStateLabel() string {
@@ -1835,9 +1852,6 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 func (a *app) drawDSPPanel() {
 	r := rl.NewRectangle(35, 650, 1530, 210)
 	drawMetalControlPanel(r)
-	if a.mode == "tx" && a.activeTab != 0 && a.activeTab != 4 {
-		drawButton(toneButtonRectangle(a.activeTab), "TONO 1 kHz", a.txSignal.enabled.Load())
-	}
 	if a.activeTab != 1 && !(a.mode == "tx" && (a.activeTab == 0 || a.activeTab == 4)) {
 		drawSectionToggle(a.sectionEnabled(a.activeTab))
 	}
@@ -2024,9 +2038,9 @@ func (a *app) drawGain() {
 }
 
 func (a *app) drawEffects() {
-	drawRecessedControlWell(rl.NewRectangle(75, 692, 1090, 110), false)
-	drawText("ECO TX", 95, 672, 25, dspColor.text)
-	box := rl.NewRectangle(55, 674, 28, 28)
+	drawRecessedControlWell(rl.NewRectangle(75, 680, 1090, 122), false)
+	drawText("ECO TX", 95, 650, 25, dspColor.text)
+	box := rl.NewRectangle(55, 652, 28, 28)
 	boxFill, boxBorder := color.panel2, color.border
 	if a.config.Echo.Enabled {
 		boxFill, boxBorder = color.amber, color.amber
@@ -2034,7 +2048,7 @@ func (a *app) drawEffects() {
 	rl.DrawRectangleRounded(box, .22, 6, boxFill)
 	rl.DrawRectangleRoundedLines(box, .22, 6, boxBorder)
 	if a.config.Echo.Enabled {
-		drawText("✓", 59, 673, 22, dspColor.text)
+		drawText("✓", 59, 651, 22, dspColor.text)
 	}
 	drawEffectTrack(700, "RETARDO", fmt.Sprintf("%.0f ms", a.config.Echo.DelayMS), (a.config.Echo.DelayMS-40)/460*100, 365, 775)
 	drawEffectTrack(738, "REALIMENTACIÓN", fmt.Sprintf("%.0f %%", a.config.Echo.Feedback), a.config.Echo.Feedback/70*100, 365, 775)
@@ -2053,13 +2067,8 @@ func (a *app) drawEffects() {
 			math.Abs(a.config.Echo.Feedback-preset[1]) < .5 && math.Abs(a.config.Echo.MixPercent-preset[2]) < .5
 		drawButton(rl.NewRectangle(float32(690+i*155), 810, 140, 30), label, selected)
 	}
+	rl.DrawLineEx(rl.NewVector2(1200, 670), rl.NewVector2(1200, 840), 2, dspColor.border)
 
-	rl.DrawLine(1200, 670, 1200, 828, dspColor.border)
-	drawText("GANANCIA", 1240, 682, 23, dspColor.text)
-	drawText(fmt.Sprintf("%+.1f dB", a.config.OutputGainDB), 1325, 730, 34, dspColor.amber)
-	percent := (a.config.OutputGainDB + 12) / 24 * 100
-	drawRecessedControlWell(rl.NewRectangle(1235, 768, 300, 42), false)
-	drawEffectTrack(780, "", "", percent, 1260, 250)
 }
 
 func drawEffectTrack(y float32, label, value string, percent float64, x, width float32) {
@@ -2323,11 +2332,16 @@ func eqGraphRectangle() rl.Rectangle {
 	return rl.NewRectangle(100, 710, 1450, 90)
 }
 
-func toneButtonRectangle(activeTab int) rl.Rectangle {
-	if activeTab == 1 {
-		return rl.NewRectangle(930, 654, 180, 42)
-	}
-	return rl.NewRectangle(1170, 665, 180, 46)
+func pttRectangle() rl.Rectangle {
+	return rl.NewRectangle(530, 385, 540, 130)
+}
+
+func txGainPanelRectangle() rl.Rectangle {
+	return rl.NewRectangle(530, 523, 540, 54)
+}
+
+func txGainTrackRectangle() rl.Rectangle {
+	return rl.NewRectangle(685, 546, 275, 10)
 }
 
 func onTopButtonRectangle() rl.Rectangle {

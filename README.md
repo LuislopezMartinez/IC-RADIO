@@ -10,7 +10,7 @@ USB externo, procesar la voz y enviarla a la entrada de audio USB de la radio.
 
 - Rutas independientes de recepción y transmisión.
 - Selección desplegable de dispositivos de grabación y reproducción.
-- Ecualizador gráfico de nueve bandas con restablecimiento.
+- Ecualizador gráfico de 11 bandas, hasta 10 kHz, con restablecimiento y bypass.
 - Filtros de corte inferior y superior ajustables sobre el espectro.
 - Énfasis de voz SSB y deénfasis FM de 50/75 µs.
 - Notch RX gráfico con frecuencia, anchura y profundidad ajustables.
