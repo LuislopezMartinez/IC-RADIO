@@ -25,6 +25,7 @@ type Processor struct {
 	echoBuffer                                              []float64
 	echoWrite                                               int
 	echoToneLowpass, echoPresenceLowpass                    float64
+	pitch                                                   pitchShifter
 	beforeNotch, output                                     *Spectrum
 	preScratch, dryScratch                                  []float32
 }
@@ -52,6 +53,7 @@ func (p *Processor) Configure(c Config) {
 	c.ProcessedMix = clamp(c.ProcessedMix, 0, 100)
 	c.SSBClarityDB = clamp(c.SSBClarityDB, -6, 9)
 	c.TXPresenceDB = clamp(c.TXPresenceDB, 0, 9)
+	c.VoiceShiftSemitones = clamp(c.VoiceShiftSemitones, -4, 4)
 	if c.Compressor.TargetDBFS == 0 {
 		c.Compressor.TargetDBFS = -18
 	}
@@ -68,6 +70,9 @@ func (p *Processor) Configure(c Config) {
 	if c.Echo.Enabled != p.config.Echo.Enabled {
 		clear(p.echoBuffer)
 		p.echoWrite, p.echoToneLowpass, p.echoPresenceLowpass = 0, 0, 0
+	}
+	if c.VoiceShiftEnabled != p.config.VoiceShiftEnabled {
+		p.pitch = pitchShifter{}
 	}
 	p.config = c
 	for i := range p.eq {
@@ -119,6 +124,9 @@ func (p *Processor) Process(samples []float32) {
 	p.beforeNotch.Add(pre)
 	if p.config.NoiseEnabled {
 		p.noise.process(samples, true, p.config.NoiseStrength, p.config.NoiseSpeed)
+	}
+	if p.config.VoiceShiftEnabled && math.Abs(p.config.VoiceShiftSemitones) >= .05 {
+		p.pitch.process(samples, p.config.VoiceShiftSemitones, p.sampleRate)
 	}
 	outputGain := math.Pow(10, p.config.OutputGainDB/20)
 	mix := p.config.ProcessedMix / 100

@@ -116,35 +116,53 @@ func (p *testToneProcessor) cancelFade() {
 }
 
 type settings struct {
-	Version         int          `json:"version"`
-	Input           string       `json:"input"`
-	Output          string       `json:"output"`
-	COM             string       `json:"com"`
-	PTTLine         ptt.Line     `json:"ptt_line"`
-	Config          audio.Config `json:"dsp"`
-	FiltersEnabled  bool         `json:"filters_enabled"`
-	GainEnabled     bool         `json:"gain_enabled"`
-	PTTMode         string       `json:"ptt_mode"`
-	PTTKey          int32        `json:"ptt_key"`
-	PTTCtrl         bool         `json:"ptt_ctrl"`
-	PTTAlt          bool         `json:"ptt_alt"`
-	PTTShift        bool         `json:"ptt_shift"`
-	RXInput         string       `json:"rx_input"`
-	RXOutput        string       `json:"rx_output"`
-	RXFollowDefault bool         `json:"rx_follow_default_output"`
-	RXConfig        audio.Config `json:"rx_dsp"`
-	RXFilters       bool         `json:"rx_filters_enabled"`
-	RXGain          bool         `json:"rx_gain_enabled"`
-	RXEmphasis      bool         `json:"rx_emphasis_enabled"`
-	RXEmphasisMode  string       `json:"rx_emphasis_mode"`
-	RXEmphasisMix   float64      `json:"rx_emphasis_amount"`
-	TXActiveTab     int          `json:"tx_active_tab"`
-	RXActiveTab     int          `json:"rx_active_tab"`
-	MonitorEnabled  bool         `json:"tx_monitor_enabled"`
-	AlwaysOnTop     bool         `json:"always_on_top"`
-	TestToneHz      float64      `json:"test_tone_hz"`
-	TXFadeEnabled   bool         `json:"tx_fade_enabled"`
-	TXFadeMS        float64      `json:"tx_fade_ms"`
+	Version         int             `json:"version"`
+	Input           string          `json:"input"`
+	Output          string          `json:"output"`
+	COM             string          `json:"com"`
+	PTTLine         ptt.Line        `json:"ptt_line"`
+	Config          audio.Config    `json:"dsp"`
+	FiltersEnabled  bool            `json:"filters_enabled"`
+	GainEnabled     bool            `json:"gain_enabled"`
+	PTTMode         string          `json:"ptt_mode"`
+	PTTKey          int32           `json:"ptt_key"`
+	PTTCtrl         bool            `json:"ptt_ctrl"`
+	PTTAlt          bool            `json:"ptt_alt"`
+	PTTShift        bool            `json:"ptt_shift"`
+	RXInput         string          `json:"rx_input"`
+	RXOutput        string          `json:"rx_output"`
+	RXFollowDefault bool            `json:"rx_follow_default_output"`
+	RXConfig        audio.Config    `json:"rx_dsp"`
+	RXFilters       bool            `json:"rx_filters_enabled"`
+	RXGain          bool            `json:"rx_gain_enabled"`
+	RXEmphasis      bool            `json:"rx_emphasis_enabled"`
+	RXEmphasisMode  string          `json:"rx_emphasis_mode"`
+	RXEmphasisMix   float64         `json:"rx_emphasis_amount"`
+	TXActiveTab     int             `json:"tx_active_tab"`
+	RXActiveTab     int             `json:"rx_active_tab"`
+	MonitorEnabled  bool            `json:"tx_monitor_enabled"`
+	AlwaysOnTop     bool            `json:"always_on_top"`
+	TestToneHz      float64         `json:"test_tone_hz"`
+	TXFadeEnabled   bool            `json:"tx_fade_enabled"`
+	TXFadeMS        float64         `json:"tx_fade_ms"`
+	GlobalPresets   [3]globalPreset `json:"global_presets"`
+}
+
+type globalPreset struct {
+	Saved          bool         `json:"saved"`
+	Name           string       `json:"name"`
+	TXConfig       audio.Config `json:"tx_dsp"`
+	TXFilters      bool         `json:"tx_filters_enabled"`
+	TXGain         bool         `json:"tx_gain_enabled"`
+	RXConfig       audio.Config `json:"rx_dsp"`
+	RXFilters      bool         `json:"rx_filters_enabled"`
+	RXGain         bool         `json:"rx_gain_enabled"`
+	RXEmphasis     bool         `json:"rx_emphasis_enabled"`
+	RXEmphasisMode string       `json:"rx_emphasis_mode"`
+	RXEmphasisMix  float64      `json:"rx_emphasis_amount"`
+	TestToneHz     float64      `json:"test_tone_hz"`
+	TXFadeEnabled  bool         `json:"tx_fade_enabled"`
+	TXFadeMS       float64      `json:"tx_fade_ms"`
 }
 
 type viewState struct {
@@ -188,6 +206,8 @@ type app struct {
 	notchDrag               int
 	echoDrag                int
 	txGainDrag              bool
+	presetOverwrite         int
+	presetNameDraft         string
 	pttSettingsOpen         bool
 	capturingPTTKey         bool
 	keyPTTActive            bool
@@ -214,7 +234,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	a := &app{processor: p, engine: e, config: audio.DefaultConfig(), spectrum: make([]float32, 257), dragEQ: -1, cutoffDrag: -1, controlDrag: -1, notchDrag: -1, echoDrag: -1, openDeviceMenu: -1, line: ptt.RTS, mode: "tx", radioState: stateTXReady, txSignal: txSignal, monitor: monitor}
+	a := &app{processor: p, engine: e, config: audio.DefaultConfig(), spectrum: make([]float32, 257), dragEQ: -1, cutoffDrag: -1, controlDrag: -1, notchDrag: -1, echoDrag: -1, presetOverwrite: -1, openDeviceMenu: -1, line: ptt.RTS, mode: "tx", radioState: stateTXReady, txSignal: txSignal, monitor: monitor}
 	defer func() {
 		_ = a.ptt.SetTX(false)
 		a.ptt.Close()
@@ -565,6 +585,11 @@ func (a *app) setTX(enabled bool) bool {
 
 func (a *app) update(mouse rl.Vector2) {
 	a.updateDefaultRXOutput()
+	if a.presetOverwrite >= 0 {
+		a.updateGlobalPresetModal(mouse)
+		a.processor.Spectrum(a.spectrum, 10000)
+		return
+	}
 	if rl.IsKeyPressed(rl.KeyEscape) {
 		if a.ptt.TX() {
 			a.setTX(false)
@@ -1071,6 +1096,21 @@ func (a *app) updateEchoControls(mouse rl.Vector2) {
 			changed = true
 		}
 	}
+	for i := range a.settings.GlobalPresets {
+		y := float32(700 + i*50)
+		if clicked(mouse, rl.NewRectangle(1360, y, 82, 38)) {
+			a.loadGlobalPreset(i)
+			return
+		}
+		if clicked(mouse, rl.NewRectangle(1452, y, 82, 38)) {
+			a.presetOverwrite = i
+			a.presetNameDraft = a.settings.GlobalPresets[i].Name
+			if strings.TrimSpace(a.presetNameDraft) == "" {
+				a.presetNameDraft = fmt.Sprintf("PRESET %d", i+1)
+			}
+			return
+		}
+	}
 	tracks := []rl.Rectangle{
 		rl.NewRectangle(365, 700, 775, 24),
 		rl.NewRectangle(365, 738, 775, 24),
@@ -1103,6 +1143,92 @@ func (a *app) updateEchoControls(mouse rl.Vector2) {
 	if changed {
 		a.applyDSPAndSave()
 	}
+}
+
+func (a *app) updateGlobalPresetModal(mouse rl.Vector2) {
+	if rl.IsKeyPressed(rl.KeyEscape) || clicked(mouse, rl.NewRectangle(520, 590, 240, 55)) || clicked(mouse, rl.NewRectangle(1060, 277, 45, 45)) {
+		a.presetOverwrite = -1
+		return
+	}
+	if rl.IsKeyPressed(rl.KeyBackspace) {
+		runes := []rune(a.presetNameDraft)
+		if len(runes) > 0 {
+			a.presetNameDraft = string(runes[:len(runes)-1])
+		}
+	}
+	for char := rl.GetCharPressed(); char != 0; char = rl.GetCharPressed() {
+		if char >= 32 && char != 127 && len([]rune(a.presetNameDraft)) < 18 {
+			a.presetNameDraft += string(rune(char))
+		}
+	}
+	if !clicked(mouse, rl.NewRectangle(840, 590, 240, 55)) {
+		return
+	}
+	index := a.presetOverwrite
+	if index >= 0 && index < len(a.settings.GlobalPresets) {
+		a.storeGlobalPreset(index, a.presetNameDraft)
+	}
+	a.presetOverwrite = -1
+}
+
+func (a *app) storeGlobalPreset(index int, name string) {
+	if index < 0 || index >= len(a.settings.GlobalPresets) {
+		return
+	}
+	a.storeActiveView()
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = fmt.Sprintf("PRESET %d", index+1)
+	}
+	a.settings.GlobalPresets[index] = globalPreset{
+		Saved: true, Name: name,
+		TXConfig: a.txView.config, TXFilters: a.txView.filtersEnabled, TXGain: a.txView.gainEnabled,
+		RXConfig: a.rxView.config, RXFilters: a.rxView.filtersEnabled, RXGain: a.rxView.gainEnabled,
+		RXEmphasis: a.settings.RXEmphasis, RXEmphasisMode: a.settings.RXEmphasisMode, RXEmphasisMix: a.settings.RXEmphasisMix,
+		TestToneHz: a.settings.TestToneHz, TXFadeEnabled: a.settings.TXFadeEnabled, TXFadeMS: a.settings.TXFadeMS,
+	}
+	a.message = fmt.Sprintf("Preset global «%s» guardado", name)
+	a.save()
+}
+
+func (a *app) loadGlobalPreset(index int) {
+	if index < 0 || index >= len(a.settings.GlobalPresets) {
+		return
+	}
+	preset := a.settings.GlobalPresets[index]
+	if !preset.Saved {
+		a.message = fmt.Sprintf("Preset global %d vacío", index+1)
+		return
+	}
+	a.storeActiveView()
+	a.txView.config, a.txView.filtersEnabled, a.txView.gainEnabled = preset.TXConfig, preset.TXFilters, preset.TXGain
+	a.rxView.config, a.rxView.filtersEnabled, a.rxView.gainEnabled = preset.RXConfig, preset.RXFilters, preset.RXGain
+	a.settings.RXEmphasis, a.settings.RXEmphasisMode, a.settings.RXEmphasisMix = preset.RXEmphasis, preset.RXEmphasisMode, preset.RXEmphasisMix
+	a.settings.TestToneHz, a.settings.TXFadeEnabled, a.settings.TXFadeMS = preset.TestToneHz, preset.TXFadeEnabled, preset.TXFadeMS
+	a.txSignal.frequencyHz.Store(int64(math.Round(a.settings.TestToneHz)))
+	configureViewDSP(&a.txView)
+	configureViewDSP(&a.rxView)
+	if a.mode == "rx" {
+		a.loadView(a.rxView)
+	} else {
+		a.loadView(a.txView)
+	}
+	a.message = fmt.Sprintf("Preset global «%s» cargado", preset.Name)
+	a.save()
+}
+
+func configureViewDSP(view *viewState) {
+	if view == nil || view.processor == nil {
+		return
+	}
+	effective := view.config
+	if !view.filtersEnabled {
+		effective.LowCutHz, effective.HighCutHz = 20, audio.DefaultSampleRate*.45
+	}
+	if !view.gainEnabled {
+		effective.OutputGainDB = 0
+	}
+	view.processor.Configure(effective)
 }
 
 func (a *app) updatePersistentTXGain(mouse rl.Vector2) {
@@ -1175,6 +1301,10 @@ func (a *app) updateTXFilterControls(mouse rl.Vector2) {
 		a.settings.FiltersEnabled = !a.settings.FiltersEnabled
 		a.applyDSPAndSave()
 	}
+	if clicked(mouse, voiceShiftToggleRectangle()) {
+		a.config.VoiceShiftEnabled = !a.config.VoiceShiftEnabled
+		a.applyDSPAndSave()
+	}
 	if clicked(mouse, txToneToggleRectangle()) {
 		enabled := !a.txSignal.enabled.Load()
 		a.txSignal.enabled.Store(enabled)
@@ -1202,6 +1332,12 @@ func (a *app) updateTXFilterControls(mouse rl.Vector2) {
 	if rl.IsMouseButtonDown(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, expandedSliderHitbox(txPresenceSliderRectangle())) {
 		percent := sliderPercent(mouse.X, txPresenceSliderRectangle())
 		a.config.TXPresenceDB = math.Round(percent*20) / 20 * 9
+		a.applyDSPAndSave()
+	}
+	if rl.IsMouseButtonDown(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, expandedSliderHitbox(voiceShiftSliderRectangle())) {
+		percent := sliderPercent(mouse.X, voiceShiftSliderRectangle())
+		a.config.VoiceShiftSemitones = math.Round((-4+percent*8)*2) / 2
+		a.config.VoiceShiftEnabled = true
 		a.applyDSPAndSave()
 	}
 }
@@ -1307,6 +1443,9 @@ func (a *app) draw(mouse rl.Vector2) {
 	}
 	if a.pttSettingsOpen {
 		a.drawPTTSettings(mouse)
+	}
+	if a.presetOverwrite >= 0 {
+		a.drawGlobalPresetModal()
 	}
 }
 
@@ -1890,14 +2029,21 @@ func (a *app) drawFilters() {
 }
 
 func (a *app) drawTXFilterControls() {
-	drawRecessedControlWell(rl.NewRectangle(45, 662, 520, 184), false)
-	drawText("PASO DE BANDA PARA VOZ", 65, 680, 22, dspColor.amber)
+	drawRecessedControlWell(rl.NewRectangle(45, 662, 520, 86), false)
+	drawText("PASO DE BANDA PARA VOZ", 65, 670, 19, dspColor.amber)
 	drawButton(txFilterToggleRectangle(), "ACTIVADO", a.settings.FiltersEnabled)
-	rl.DrawLine(65, 718, 545, 718, rl.NewColor(110, 117, 118, 180))
-	drawText(fmt.Sprintf("Corte inferior: %.0f Hz", a.config.LowCutHz), 65, 730, 20, dspColor.text)
-	drawText(fmt.Sprintf("Corte superior: %.0f Hz", a.config.HighCutHz), 65, 765, 20, dspColor.text)
-	rl.DrawLine(65, 802, 545, 802, rl.NewColor(110, 117, 118, 180))
-	drawText("Arrastra las líneas ámbar sobre el espectro.", 65, 812, 16, dspColor.muted)
+	rl.DrawLine(65, 707, 545, 707, rl.NewColor(110, 117, 118, 180))
+	drawText(fmt.Sprintf("Inferior: %.0f Hz", a.config.LowCutHz), 65, 714, 16, dspColor.text)
+	drawText(fmt.Sprintf("Superior: %.0f Hz", a.config.HighCutHz), 285, 714, 16, dspColor.text)
+	drawText("Ajuste directo sobre el espectro", 65, 735, 13, dspColor.muted)
+
+	drawRecessedControlWell(rl.NewRectangle(45, 752, 520, 94), false)
+	drawText("MODIFICADOR DE VOZ", 65, 760, 18, dspColor.amber)
+	drawButton(voiceShiftToggleRectangle(), "ACTIVADO", a.config.VoiceShiftEnabled)
+	drawText("GRAVE", 65, 796, 13, dspColor.text)
+	drawText("AGUDA", 350, 796, 13, dspColor.text)
+	drawMechanicalSlider(voiceShiftSliderRectangle(), (a.config.VoiceShiftSemitones+4)/8*100, controlColor.active)
+	drawControlValue(rl.NewRectangle(425, 800, 115, 38), fmt.Sprintf("%+.1f ST", a.config.VoiceShiftSemitones))
 
 	drawRecessedControlWell(rl.NewRectangle(575, 662, 975, 56), false)
 	drawText("GENERADOR DE TONO", 590, 674, 18, dspColor.amber)
@@ -2068,7 +2214,39 @@ func (a *app) drawEffects() {
 		drawButton(rl.NewRectangle(float32(690+i*155), 810, 140, 30), label, selected)
 	}
 	rl.DrawLineEx(rl.NewVector2(1200, 670), rl.NewVector2(1200, 840), 2, dspColor.border)
+	drawText("PRESETS GLOBALES", 1220, 662, 18, dspColor.text)
+	for i, preset := range a.settings.GlobalPresets {
+		y := float32(700 + i*50)
+		label := fmt.Sprintf("PRESET %d", i+1)
+		if preset.Saved && strings.TrimSpace(preset.Name) != "" {
+			label = preset.Name
+		}
+		drawText(ellipsis(label, 13), 1220, int32(y+7), 16, dspColor.text)
+		drawButton(rl.NewRectangle(1360, y, 82, 38), "LOAD", false)
+		drawButton(rl.NewRectangle(1452, y, 82, 38), "SAVE", false)
+	}
 
+}
+
+func (a *app) drawGlobalPresetModal() {
+	index := a.presetOverwrite
+	if index < 0 || index >= len(a.settings.GlobalPresets) {
+		return
+	}
+	rl.DrawRectangle(0, 0, viewW, viewH, rl.NewColor(0, 0, 0, 195))
+	panel := rl.NewRectangle(480, 255, 640, 415)
+	rl.DrawRectangleRounded(panel, .06, 12, rl.NewColor(15, 29, 41, 255))
+	rl.DrawRectangleRoundedLines(panel, .06, 12, color.amber)
+	drawText("GUARDAR PRESET GLOBAL", 525, 295, 28, color.text)
+	drawButton(rl.NewRectangle(1060, 277, 45, 45), "X", false)
+	drawText("NOMBRE DEL PRESET", 525, 355, 18, color.muted)
+	nameBox := rl.NewRectangle(525, 385, 550, 55)
+	drawDarkDisplay(nameBox)
+	drawText(ellipsis(a.presetNameDraft+"_", 19), 545, 400, 22, color.text)
+	drawText(fmt.Sprintf("¿SOBREESCRIBIR LA RANURA %d?", index+1), 525, 470, 23, color.amber)
+	drawWrappedText("Se guardarán conjuntamente todos los parámetros DSP de RX y TX. La configuración anterior de esta ranura será sustituida.", 525, 510, 550, 17, 26, color.muted)
+	drawButton(rl.NewRectangle(520, 590, 240, 55), "CANCELAR", false)
+	drawButton(rl.NewRectangle(840, 590, 240, 55), "SOBREESCRIBIR", true)
 }
 
 func drawEffectTrack(y float32, label, value string, percent float64, x, width float32) {
@@ -2349,7 +2527,15 @@ func onTopButtonRectangle() rl.Rectangle {
 }
 
 func txFilterToggleRectangle() rl.Rectangle {
-	return rl.NewRectangle(390, 674, 150, 38)
+	return rl.NewRectangle(390, 668, 150, 34)
+}
+
+func voiceShiftToggleRectangle() rl.Rectangle {
+	return rl.NewRectangle(390, 758, 150, 34)
+}
+
+func voiceShiftSliderRectangle() rl.Rectangle {
+	return rl.NewRectangle(125, 817, 280, 12)
 }
 
 func txToneToggleRectangle() rl.Rectangle {
@@ -2594,7 +2780,7 @@ func (a *app) save() {
 			a.settings.RXOutput = a.rxView.outputs[a.rxView.outIndex].Name
 		}
 	}
-	a.settings.Version = 10
+	a.settings.Version = 12
 	path := settingsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return

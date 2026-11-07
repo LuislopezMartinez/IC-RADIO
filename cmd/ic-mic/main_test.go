@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 
@@ -13,6 +14,66 @@ type recordingMonitor struct{ samples []float32 }
 
 func (m *recordingMonitor) Write(samples []float32) {
 	m.samples = append(m.samples, samples...)
+}
+
+func TestGlobalPresetsPersistInSettingsJSON(t *testing.T) {
+	txConfig := audio.DefaultConfig()
+	txConfig.Echo = audio.EchoConfig{Enabled: true, DelayMS: 235, Feedback: 31, MixPercent: 17, Tone: audio.EchoBright}
+	txConfig.VoiceShiftEnabled, txConfig.VoiceShiftSemitones = true, 2.5
+	rxConfig := audio.DefaultConfig()
+	rxConfig.Notch.Enabled, rxConfig.Notch.FrequencyHz = true, 2450
+	want := globalPreset{Saved: true, Name: "DX SSB", TXConfig: txConfig, TXFilters: true, TXGain: true,
+		RXConfig: rxConfig, RXFilters: true, RXGain: true, RXEmphasis: true, RXEmphasisMode: "ssb", RXEmphasisMix: 65,
+		TestToneHz: 1200, TXFadeEnabled: true, TXFadeMS: 850}
+	original := settings{Version: 12}
+	original.GlobalPresets[1] = want
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored settings
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.GlobalPresets[1]; got != want {
+		t.Fatalf("preset restaurado = %+v, esperado %+v", got, want)
+	}
+}
+
+func TestVoiceShiftRaisesPitchWithoutChangingDuration(t *testing.T) {
+	processor := audio.NewProcessor(audio.DefaultSampleRate)
+	config := audio.DefaultConfig()
+	config.LowCutHz, config.HighCutHz = 20, 8000
+	config.EQEnabled, config.Compressor.Enabled, config.NoiseEnabled = false, false, false
+	config.VoiceShiftEnabled, config.VoiceShiftSemitones = true, 4
+	processor.Configure(config)
+
+	const inputFrequency = 200.0
+	samples := make([]float32, int(audio.DefaultSampleRate*1.5))
+	for i := range samples {
+		samples[i] = float32(.25 * math.Sin(2*math.Pi*inputFrequency*float64(i)/audio.DefaultSampleRate))
+	}
+	for start := 0; start < len(samples); start += 480 {
+		end := min(start+480, len(samples))
+		processor.Process(samples[start:end])
+	}
+
+	measurement := samples[int(audio.DefaultSampleRate*.5):]
+	crossings := 0
+	for i := 1; i < len(measurement); i++ {
+		if measurement[i-1] <= 0 && measurement[i] > 0 {
+			crossings++
+		}
+	}
+	measured := float64(crossings) * audio.DefaultSampleRate / float64(len(measurement))
+	want := inputFrequency * math.Pow(2, 4.0/12)
+	if math.Abs(measured-want) > want*.12 {
+		t.Fatalf("frecuencia desplazada = %.1f Hz, esperada aproximadamente %.1f Hz", measured, want)
+	}
+	if len(samples) != int(audio.DefaultSampleRate*1.5) {
+		t.Fatal("el modificador alteró la duración del bloque")
+	}
 }
 
 func TestBindingKeyName(t *testing.T) {

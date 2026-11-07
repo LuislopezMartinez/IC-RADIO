@@ -16,6 +16,7 @@ USB externo, procesar la voz y enviarla a la entrada de audio USB de la radio.
 - Notch RX gráfico con frecuencia, anchura y profundidad ajustables.
 - Compresor TX en pasos predefinidos.
 - Eco TX con retardo, realimentación, mezcla, tono y perfiles rápidos.
+- Modificador de voz TX de -4 a +4 semitonos sin alterar la duración.
 - Reducción de ruido regulable con integración lenta, media o rápida.
 - Ganancia independiente para RX y TX.
 - Monitor `MON` para escuchar la señal TX procesada por los auriculares RX.
@@ -23,6 +24,7 @@ USB externo, procesar la voz y enviarla a la entrada de audio USB de la radio.
 - PTT por RTS o DTR con modos mantener y bloqueo.
 - Atajo PTT configurable y retorno de emergencia a RX mediante Escape.
 - Persistencia independiente de todos los parámetros RX y TX.
+- Tres presets globales con nombre editable para guardar y recuperar conjuntamente los parámetros DSP de RX y TX.
 
 ## Compatibilidad
 

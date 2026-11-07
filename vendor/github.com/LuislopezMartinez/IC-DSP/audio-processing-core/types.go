@@ -71,6 +71,8 @@ type Config struct {
 	EmphasisMicroseconds int
 	SSBClarityDB         float64
 	TXPresenceDB         float64
+	VoiceShiftEnabled    bool
+	VoiceShiftSemitones  float64
 	OutputGainDB         float64
 	ProcessedMix         float64
 	Compressor           CompressorConfig

@@ -1,24 +1,27 @@
-# IC-RADIO v0.4.0
+# IC-RADIO v0.5.0
 
-Nueva versión para Windows x64 centrada en un control de transmisión más
-directo, una distribución TX más compacta y un monitor de audio más robusto.
+Nueva versión para Windows x64 centrada en la personalización completa del
+audio y la recuperación rápida de configuraciones RX/TX.
 
 ## Novedades
 
-- Nuevo control de ganancia TX permanente bajo el PTT, disponible desde todas
-  las pestañas de transmisión.
-- PTT más compacto para separar claramente la transmisión del ajuste de nivel.
-- La ganancia TX conserva su valor y puede ajustarse sin abandonar la sección
-  DSP que se esté utilizando.
-- Panel de eco TX redistribuido para aprovechar mejor el espacio disponible.
-- El monitor `MON` vuelve a enumerar las salidas de audio antes de abrirlas,
-  permitiendo reconocer cambios recientes en el dispositivo de Windows.
-- Ecualizador documentado correctamente como 11 bandas hasta 10 kHz, con
-  restablecimiento y bypass.
+- Nuevo modificador de voz TX ajustable entre -4 y +4 semitonos en pasos de
+  medio semitono, sin cambiar la duración de la locución.
+- Procesamiento granular continuo con compensación tonal para mantener el
+  cuerpo de la voz en desplazamientos moderados.
+- Panel de filtros TX dividido en dos módulos: paso de banda y modificador de
+  voz.
+- Tres presets globales capaces de guardar conjuntamente todos los parámetros
+  DSP de RX y TX.
+- Nombre editable para cada preset y confirmación antes de sobrescribir una
+  ranura.
+- Botones `LOAD` y `SAVE` para recuperar o actualizar rápidamente cada perfil.
+- Los presets, sus nombres y el modificador de voz permanecen guardados al
+  cerrar el programa.
 
 ## Descarga
 
-Descarga `IC-RADIO-Windows-x64-v0.4.0.zip`, extrae el archivo y ejecuta
+Descarga `IC-RADIO-Windows-x64-v0.5.0.zip`, extrae el archivo y ejecuta
 `ic-radio.exe`. El binario no está firmado digitalmente, por lo que Windows
 puede solicitar confirmación la primera vez.
 
