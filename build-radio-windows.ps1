@@ -1,6 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$outputPath = Join-Path $projectRoot 'ic-radio.exe'
+
+Write-Host 'Preparando compilacion de IC-RADIO...'
+
 $compiler = Get-Command gcc.exe -ErrorAction SilentlyContinue
 if (-not $compiler) {
     $knownCompilers = @(
@@ -24,11 +28,16 @@ $env:CGO_ENABLED = '1'
 
 Push-Location $projectRoot
 try {
-	go test -mod=vendor -tags noaudio ./...
-	go build -mod=vendor -tags noaudio -trimpath -ldflags '-H=windowsgui' -o ic-radio.exe ./cmd/ic-mic
+    Write-Host 'Ejecutando pruebas...'
+    go test -mod=vendor -tags noaudio ./...
+    if ($LASTEXITCODE -ne 0) { throw "Las pruebas fallaron con codigo $LASTEXITCODE." }
+
+    Write-Host 'Generando ejecutable...'
+    go build -mod=vendor -tags noaudio -trimpath -ldflags '-H=windowsgui' -o $outputPath ./cmd/ic-mic
+    if ($LASTEXITCODE -ne 0) { throw "La compilacion fallo con codigo $LASTEXITCODE." }
 }
 finally {
     Pop-Location
 }
 
-Write-Host "Compilación completada: $(Join-Path $projectRoot 'ic-radio.exe')"
+Write-Host "Compilacion completada: $outputPath" -ForegroundColor Green

@@ -1,25 +1,31 @@
-# IC-RADIO v0.2.0
+# IC-RADIO v0.3.0
 
-Actualización principal para Windows x64 centrada en el procesamiento TX, la
-legibilidad y una presentación más cercana a un procesador físico de rack.
+Nueva versión para Windows x64 centrada en la seguridad del audio, el control
+de transmisión y una interfaz más clara y precisa.
 
 ## Novedades
 
-- Nueva interfaz de aluminio cepillado inspirada en procesadores enracables.
-- Selectores de audio desplegables con etiquetas y dispositivo claramente separados.
-- Eco TX con retardo, realimentación, mezcla, perfiles rápidos y tonos oscuro,
-  neutro y brillante ahora perceptiblemente diferenciados para audio de radio.
-- Botón de bypass y restablecimiento independiente del ecualizador.
-- Pestañas y botones activos con iluminación ámbar y mayor profundidad visual.
-- Medidores con gradiente continuo y monitor `MON` para la señal TX procesada.
-- Interfaz combinada RX/TX, notch RX gráfico, énfasis SSB y deénfasis FM.
-- Persistencia completa e independiente de los parámetros RX y TX.
-- Corrección del proceso de compilación para garantizar la detección de los
-  dispositivos de audio reales mediante CGO/Miniaudio.
+- El programa ya no modifica ni fuerza al 100 % el volumen de salida de
+  Windows al iniciarse, recompilarse o cambiar de dispositivo.
+- Nuevo interruptor `ON TOP` para mantener la consola siempre en primer plano.
+- Espectro rediseñado desde 100 Hz, con más barras, mayor definición, mejor
+  lectura de agudos y estética cibernética en cian, verde y ámbar.
+- Ecualizador gráfico renovado, con mejor contraste, escala contenida dentro
+  del panel y respuesta de agudos mejorada.
+- Nueva distribución de la pestaña Filtros TX.
+- Generador de tono TX ajustable entre 0 y 5 kHz.
+- Nuevo `FADE ON PTT` configurable entre 0 y 3000 ms para abrir el audio de
+  forma progresiva al comenzar la transmisión.
+- Controles de paso de banda, presencia TX y estados activos reorganizados
+  para una lectura más rápida.
+- Paneles, sliders y estados activos con mayor contraste sobre el acabado de
+  aluminio.
+- Script `compilar-radio.cmd` ejecutable con doble clic desde el Explorador de
+  Windows.
 
 ## Descarga
 
-Descarga `IC-RADIO-Windows-x64.zip`, extrae el archivo y ejecuta
+Descarga `IC-RADIO-Windows-x64-v0.3.0.zip`, extrae el archivo y ejecuta
 `ic-radio.exe`. El binario no está firmado digitalmente, por lo que Windows
 puede solicitar confirmación la primera vez.
 

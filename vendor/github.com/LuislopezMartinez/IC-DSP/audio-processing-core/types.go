@@ -70,6 +70,7 @@ type Config struct {
 	Emphasis             EmphasisMode
 	EmphasisMicroseconds int
 	SSBClarityDB         float64
+	TXPresenceDB         float64
 	OutputGainDB         float64
 	ProcessedMix         float64
 	Compressor           CompressorConfig
@@ -93,7 +94,7 @@ func DefaultConfig() Config {
 }
 
 // MigrateLegacyEQ expands the original five stored gains into the current
-// nine-band layout. Original bands are preserved and new bands are linearly
+// eleven-band layout. Original bands are preserved and new bands are linearly
 // interpolated in dB, which keeps old presets perceptually continuous.
 func MigrateLegacyEQ(c *Config) {
 	old := c.EQGainsDB
@@ -102,6 +103,6 @@ func MigrateLegacyEQ(c *Config) {
 		old[1], (old[1] + old[2]) / 2,
 		old[2], (old[2] + old[3]) / 2,
 		old[3], (old[3] + old[4]) / 2,
-		old[4],
+		old[4], 0, 0,
 	}
 }

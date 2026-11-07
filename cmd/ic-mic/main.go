@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,13 +19,16 @@ import (
 )
 
 const (
-	viewW             = 1600
-	viewH             = 900
-	stateRX           = "rx_listening"
-	stateTXReady      = "tx_ready"
-	stateTransmitting = "transmitting"
-	stateError        = "error"
-	maxTXDuration     = 3 * time.Minute
+	viewW              = 1600
+	viewH              = 900
+	spectrumMinHz      = 100.0
+	spectrumMaxHz      = 10000.0
+	spectrumVisualBars = 96
+	stateRX            = "rx_listening"
+	stateTXReady       = "tx_ready"
+	stateTransmitting  = "transmitting"
+	stateError         = "error"
+	maxTXDuration      = 3 * time.Minute
 )
 
 var color = struct {
@@ -35,13 +39,31 @@ var color = struct {
 	rl.NewColor(16, 218, 236, 255), rl.NewColor(54, 230, 119, 255), rl.NewColor(255, 190, 40, 255), rl.NewColor(235, 25, 39, 255),
 }
 
+var dspColor = struct {
+	text, muted, amber, border rl.Color
+}{
+	rl.NewColor(8, 11, 12, 255), rl.NewColor(35, 40, 42, 255),
+	rl.NewColor(128, 72, 0, 255), rl.NewColor(73, 79, 80, 225),
+}
+
+var controlColor = struct {
+	well, track, inactive, active, activeEdge, eqLine rl.Color
+}{
+	rl.NewColor(182, 187, 186, 255), rl.NewColor(38, 52, 58, 255), rl.NewColor(52, 69, 77, 255),
+	rl.NewColor(255, 193, 40, 255), rl.NewColor(180, 91, 0, 255), rl.NewColor(31, 205, 220, 255),
+}
+
 var regularFont, semiboldFont, militaryFont rl.Font
 
 type testToneProcessor struct {
-	base    *audio.Processor
-	monitor sampleMonitor
-	enabled atomic.Bool
-	phase   float64
+	base          *audio.Processor
+	monitor       sampleMonitor
+	enabled       atomic.Bool
+	frequencyHz   atomic.Int64
+	phase         float64
+	fadeMu        sync.Mutex
+	fadeRemaining int64
+	fadeTotal     int64
 }
 
 type sampleMonitor interface {
@@ -50,9 +72,14 @@ type sampleMonitor interface {
 
 func (p *testToneProcessor) Process(samples []float32) {
 	if p.enabled.Load() {
-		phaseStep := 2 * math.Pi * 1000 / audio.DefaultSampleRate
+		frequency := max(int64(0), min(int64(5000), p.frequencyHz.Load()))
+		phaseStep := 2 * math.Pi * float64(frequency) / audio.DefaultSampleRate
 		for i := range samples {
-			samples[i] = float32(.1 * math.Sin(p.phase))
+			if frequency == 0 {
+				samples[i] = 0
+			} else {
+				samples[i] = float32(.1 * math.Sin(p.phase))
+			}
 			p.phase += phaseStep
 			if p.phase >= 2*math.Pi {
 				p.phase -= 2 * math.Pi
@@ -60,36 +87,64 @@ func (p *testToneProcessor) Process(samples []float32) {
 		}
 	}
 	p.base.Process(samples)
+	p.fadeMu.Lock()
+	for i := range samples {
+		if p.fadeRemaining <= 0 || p.fadeTotal <= 0 {
+			break
+		}
+		gain := 1 - float64(p.fadeRemaining)/float64(p.fadeTotal)
+		samples[i] *= float32(max(0.0, min(1.0, gain)))
+		p.fadeRemaining--
+	}
+	p.fadeMu.Unlock()
 	if p.monitor != nil {
 		p.monitor.Write(samples)
 	}
 }
 
+func (p *testToneProcessor) startFade(milliseconds float64) {
+	p.fadeMu.Lock()
+	defer p.fadeMu.Unlock()
+	p.fadeTotal = int64(max(0.0, milliseconds) * audio.DefaultSampleRate / 1000)
+	p.fadeRemaining = p.fadeTotal
+}
+
+func (p *testToneProcessor) cancelFade() {
+	p.fadeMu.Lock()
+	p.fadeRemaining, p.fadeTotal = 0, 0
+	p.fadeMu.Unlock()
+}
+
 type settings struct {
-	Version        int          `json:"version"`
-	Input          string       `json:"input"`
-	Output         string       `json:"output"`
-	COM            string       `json:"com"`
-	PTTLine        ptt.Line     `json:"ptt_line"`
-	Config         audio.Config `json:"dsp"`
-	FiltersEnabled bool         `json:"filters_enabled"`
-	GainEnabled    bool         `json:"gain_enabled"`
-	PTTMode        string       `json:"ptt_mode"`
-	PTTKey         int32        `json:"ptt_key"`
-	PTTCtrl        bool         `json:"ptt_ctrl"`
-	PTTAlt         bool         `json:"ptt_alt"`
-	PTTShift       bool         `json:"ptt_shift"`
-	RXInput        string       `json:"rx_input"`
-	RXOutput       string       `json:"rx_output"`
-	RXConfig       audio.Config `json:"rx_dsp"`
-	RXFilters      bool         `json:"rx_filters_enabled"`
-	RXGain         bool         `json:"rx_gain_enabled"`
-	RXEmphasis     bool         `json:"rx_emphasis_enabled"`
-	RXEmphasisMode string       `json:"rx_emphasis_mode"`
-	RXEmphasisMix  float64      `json:"rx_emphasis_amount"`
-	TXActiveTab    int          `json:"tx_active_tab"`
-	RXActiveTab    int          `json:"rx_active_tab"`
-	MonitorEnabled bool         `json:"tx_monitor_enabled"`
+	Version         int          `json:"version"`
+	Input           string       `json:"input"`
+	Output          string       `json:"output"`
+	COM             string       `json:"com"`
+	PTTLine         ptt.Line     `json:"ptt_line"`
+	Config          audio.Config `json:"dsp"`
+	FiltersEnabled  bool         `json:"filters_enabled"`
+	GainEnabled     bool         `json:"gain_enabled"`
+	PTTMode         string       `json:"ptt_mode"`
+	PTTKey          int32        `json:"ptt_key"`
+	PTTCtrl         bool         `json:"ptt_ctrl"`
+	PTTAlt          bool         `json:"ptt_alt"`
+	PTTShift        bool         `json:"ptt_shift"`
+	RXInput         string       `json:"rx_input"`
+	RXOutput        string       `json:"rx_output"`
+	RXFollowDefault bool         `json:"rx_follow_default_output"`
+	RXConfig        audio.Config `json:"rx_dsp"`
+	RXFilters       bool         `json:"rx_filters_enabled"`
+	RXGain          bool         `json:"rx_gain_enabled"`
+	RXEmphasis      bool         `json:"rx_emphasis_enabled"`
+	RXEmphasisMode  string       `json:"rx_emphasis_mode"`
+	RXEmphasisMix   float64      `json:"rx_emphasis_amount"`
+	TXActiveTab     int          `json:"tx_active_tab"`
+	RXActiveTab     int          `json:"rx_active_tab"`
+	MonitorEnabled  bool         `json:"tx_monitor_enabled"`
+	AlwaysOnTop     bool         `json:"always_on_top"`
+	TestToneHz      float64      `json:"test_tone_hz"`
+	TXFadeEnabled   bool         `json:"tx_fade_enabled"`
+	TXFadeMS        float64      `json:"tx_fade_ms"`
 }
 
 type viewState struct {
@@ -107,40 +162,47 @@ type viewState struct {
 }
 
 type app struct {
-	processor        *audio.Processor
-	engine           *audioio.Engine
-	ptt              ptt.Controller
-	config           audio.Config
-	settings         settings
-	inputs           []audioio.Device
-	outputs          []audioio.Device
-	ports            []ptt.Port
-	inIndex          int
-	outIndex         int
-	comIndex         int
-	line             ptt.Line
-	message          string
-	txSince          time.Time
-	spectrum         []float32
-	activeTab        int
-	dragEQ           int
-	cutoffDrag       int
-	controlDrag      int
-	notchDrag        int
-	echoDrag         int
-	pttSettingsOpen  bool
-	capturingPTTKey  bool
-	keyPTTActive     bool
-	mousePTTActive   bool
-	openDeviceMenu   int
-	deviceMenuScroll int
-	mode             string
-	txView           viewState
-	rxView           viewState
-	radioState       string
-	pttStartedFromRX bool
-	txSignal         *testToneProcessor
-	monitor          *audioio.PlaybackMonitor
+	processor               *audio.Processor
+	engine                  *audioio.Engine
+	ptt                     ptt.Controller
+	config                  audio.Config
+	settings                settings
+	inputs                  []audioio.Device
+	outputs                 []audioio.Device
+	ports                   []ptt.Port
+	inIndex                 int
+	outIndex                int
+	comIndex                int
+	line                    ptt.Line
+	message                 string
+	txSince                 time.Time
+	spectrum                []float32
+	spectrumDisplay         []float32
+	spectrumAverage         []float32
+	spectrumPeak            []float32
+	spectrumPeakHold        []float32
+	activeTab               int
+	dragEQ                  int
+	cutoffDrag              int
+	controlDrag             int
+	notchDrag               int
+	echoDrag                int
+	pttSettingsOpen         bool
+	capturingPTTKey         bool
+	keyPTTActive            bool
+	mousePTTActive          bool
+	openDeviceMenu          int
+	deviceMenuScroll        int
+	mode                    string
+	txView                  viewState
+	rxView                  viewState
+	radioState              string
+	pttStartedFromRX        bool
+	txSignal                *testToneProcessor
+	monitor                 *audioio.PlaybackMonitor
+	defaultOutputName       string
+	lastDefaultEndpointName string
+	lastDefaultCheck        time.Time
 }
 
 func main() {
@@ -168,6 +230,7 @@ func main() {
 		}
 	}()
 	a.load()
+	a.txSignal.frequencyHz.Store(int64(math.Round(a.settings.TestToneHz)))
 	a.refreshDevices()
 	a.applyDSP()
 	a.activeTab = validTab(a.settings.TXActiveTab)
@@ -182,10 +245,18 @@ func main() {
 		rxConfig = audio.DefaultConfig()
 		rxConfig.LowCutHz, rxConfig.HighCutHz = 100, 4000
 	}
+	rxConfig.LowCutHz = max(spectrumMinHz, rxConfig.LowCutHz)
 	applyRXEmphasis(&rxConfig, a.settings.RXEmphasis, a.settings.RXEmphasisMode, a.settings.RXEmphasisMix)
 	rxInputs, rxOutputs := rxEngine.Inputs(), rxEngine.Outputs()
+	rxOutputIndex := namedDevice(rxOutputs, a.settings.RXOutput)
+	if a.settings.RXFollowDefault {
+		rxOutputIndex = defaultDeviceIndex(rxOutputs)
+		if len(rxOutputs) > 0 {
+			a.defaultOutputName = rxOutputs[rxOutputIndex].Name
+		}
+	}
 	a.rxView = viewState{processor: rxProcessor, engine: rxEngine, config: rxConfig, inputs: rxInputs, outputs: rxOutputs,
-		inIndex: namedDevice(rxInputs, a.settings.RXInput), outIndex: namedDevice(rxOutputs, a.settings.RXOutput), spectrum: make([]float32, 257),
+		inIndex: namedDevice(rxInputs, a.settings.RXInput), outIndex: rxOutputIndex, spectrum: make([]float32, 257),
 		filtersEnabled: a.settings.RXFilters, gainEnabled: a.settings.RXGain, activeTab: validTab(a.settings.RXActiveTab)}
 	if a.settings.Version < 4 {
 		a.rxView.filtersEnabled, a.rxView.gainEnabled = true, true
@@ -214,7 +285,11 @@ func main() {
 	}
 	defer a.save()
 
-	rl.SetConfigFlags(rl.FlagWindowResizable | rl.FlagVsyncHint | rl.FlagMsaa4xHint | rl.FlagWindowHighdpi)
+	windowFlags := uint32(rl.FlagWindowResizable | rl.FlagVsyncHint | rl.FlagMsaa4xHint | rl.FlagWindowHighdpi)
+	if a.settings.AlwaysOnTop {
+		windowFlags |= rl.FlagWindowTopmost
+	}
+	rl.SetConfigFlags(windowFlags)
 	rl.InitWindow(1280, 720, "IC-RADIO · Consola RX/TX para transceptores")
 	defer rl.CloseWindow()
 	codepoints := latinCodepoints()
@@ -283,6 +358,7 @@ func (a *app) loadView(view viewState) {
 	a.inIndex, a.outIndex, a.spectrum = view.inIndex, view.outIndex, view.spectrum
 	a.settings.FiltersEnabled, a.settings.GainEnabled = view.filtersEnabled, view.gainEnabled
 	a.activeTab = validTab(view.activeTab)
+	a.spectrumDisplay, a.spectrumAverage, a.spectrumPeak, a.spectrumPeakHold = nil, nil, nil, nil
 }
 
 func (a *app) switchMode(mode string) {
@@ -446,8 +522,16 @@ func (a *app) setTX(enabled bool) bool {
 	}
 	if enabled {
 		a.stopRXMonitor()
+		if a.settings.TXFadeEnabled {
+			a.txSignal.startFade(a.settings.TXFadeMS)
+		} else {
+			a.txSignal.cancelFade()
+		}
+	} else {
+		a.txSignal.cancelFade()
 	}
 	if err := a.ptt.SetTX(enabled); err != nil {
+		a.txSignal.cancelFade()
 		errorText := err.Error()
 		a.message, a.radioState = errorText, stateError
 		if enabled && a.pttStartedFromRX {
@@ -479,6 +563,7 @@ func (a *app) setTX(enabled bool) bool {
 }
 
 func (a *app) update(mouse rl.Vector2) {
+	a.updateDefaultRXOutput()
 	if rl.IsKeyPressed(rl.KeyEscape) {
 		if a.ptt.TX() {
 			a.setTX(false)
@@ -520,11 +605,31 @@ func (a *app) update(mouse rl.Vector2) {
 		a.switchMode("tx")
 		return
 	}
+	if clicked(mouse, onTopButtonRectangle()) {
+		a.settings.AlwaysOnTop = !a.settings.AlwaysOnTop
+		if a.settings.AlwaysOnTop {
+			rl.SetWindowState(rl.FlagWindowTopmost)
+			a.message = "Ventana siempre en primer plano"
+		} else {
+			rl.ClearWindowState(rl.FlagWindowTopmost)
+			a.message = "Ventana en modo normal"
+		}
+		a.save()
+	}
 	if clicked(mouse, rl.NewRectangle(30, 92, 710, 64)) && len(a.inputs) > 0 {
 		a.openDeviceMenu, a.deviceMenuScroll = 0, initialDeviceScroll(a.inIndex, len(a.inputs))
 	}
 	if clicked(mouse, rl.NewRectangle(860, 92, 710, 64)) && len(a.outputs) > 0 {
-		a.openDeviceMenu, a.deviceMenuScroll = 1, initialDeviceScroll(a.outIndex, len(a.outputs))
+		selected, count := a.outIndex, len(a.outputs)
+		if a.mode == "rx" {
+			count++
+			if a.settings.RXFollowDefault {
+				selected = 0
+			} else {
+				selected++
+			}
+		}
+		a.openDeviceMenu, a.deviceMenuScroll = 1, initialDeviceScroll(selected, count)
 	}
 	if clicked(mouse, rl.NewRectangle(920, 22, 200, 48)) && len(a.ports) > 0 {
 		a.comIndex = (a.comIndex + 1) % len(a.ports)
@@ -556,14 +661,15 @@ func (a *app) update(mouse rl.Vector2) {
 		a.toggleTX()
 	}
 	for i := 0; i < 5; i++ {
-		if clicked(mouse, rl.NewRectangle(float32(20+i*312), 590, 300, 56)) {
+		if clicked(mouse, tabRectangle(i)) {
 			a.activeTab = i
 		}
 	}
 	a.updateCutoffs(mouse)
 	a.updateNotchFromSpectrum(mouse)
 	a.updateRXEmphasis(mouse)
-	if a.mode == "tx" && clicked(mouse, rl.NewRectangle(1170, 665, 180, 46)) {
+	a.updateTXFilterControls(mouse)
+	if a.mode == "tx" && a.activeTab != 0 && clicked(mouse, toneButtonRectangle(a.activeTab)) {
 		enabled := !a.txSignal.enabled.Load()
 		a.txSignal.enabled.Store(enabled)
 		if enabled {
@@ -575,7 +681,7 @@ func (a *app) update(mouse rl.Vector2) {
 	if a.mode == "tx" && clicked(mouse, rl.NewRectangle(1460, 403, 82, 40)) {
 		a.toggleOutputMonitor()
 	}
-	if !(a.mode == "tx" && a.activeTab == 4) && clicked(mouse, rl.NewRectangle(1370, 665, 180, 46)) {
+	if a.activeTab != 1 && !(a.mode == "tx" && (a.activeTab == 0 || a.activeTab == 4)) && clicked(mouse, rl.NewRectangle(1370, 665, 180, 46)) {
 		a.toggleActiveSection()
 	}
 	if a.activeTab == 1 {
@@ -585,15 +691,84 @@ func (a *app) update(mouse rl.Vector2) {
 	a.processor.Spectrum(a.spectrum, 10000)
 }
 
+func (a *app) updateDefaultRXOutput() {
+	if !a.settings.RXFollowDefault || time.Since(a.lastDefaultCheck) < time.Second {
+		return
+	}
+	a.lastDefaultCheck = time.Now()
+	name, err := audioio.DefaultPlaybackEndpointName()
+	if err != nil || name == "" || name == a.lastDefaultEndpointName {
+		return
+	}
+
+	view := &a.rxView
+	if a.mode == "rx" {
+		view = nil
+	}
+	engine := a.rxView.engine
+	inputs, outputs := a.rxView.inputs, a.rxView.outputs
+	inIndex := a.rxView.inIndex
+	wasRunning := engine != nil && engine.Status().Running
+	if a.mode == "rx" {
+		engine, inputs, outputs, inIndex = a.engine, a.inputs, a.outputs, a.inIndex
+		wasRunning = engine != nil && engine.Status().Running
+	}
+	if engine == nil {
+		return
+	}
+	inputName := deviceName(inputs, inIndex)
+	if err := engine.Refresh(); err != nil {
+		a.message = "No se pudo actualizar la salida predeterminada: " + err.Error()
+		return
+	}
+	inputs, outputs = engine.Inputs(), engine.Outputs()
+	if len(inputs) == 0 || len(outputs) == 0 {
+		a.message = "La salida predeterminada de Windows no está disponible"
+		return
+	}
+	inIndex = namedDevice(inputs, inputName)
+	outIndex := namedDevice(outputs, name)
+	if wasRunning {
+		if err := engine.Start(inIndex, outIndex); err != nil {
+			a.message = "Cambiar salida RX: " + err.Error()
+			return
+		}
+	}
+	if view == nil {
+		a.inputs, a.outputs, a.inIndex, a.outIndex = inputs, outputs, inIndex, outIndex
+		a.rxView = a.snapshotView()
+	} else {
+		view.inputs, view.outputs, view.inIndex, view.outIndex = inputs, outputs, inIndex, outIndex
+	}
+	a.defaultOutputName = outputs[outIndex].Name
+	a.lastDefaultEndpointName = name
+	a.settings.RXOutput = a.defaultOutputName
+	if a.settings.MonitorEnabled {
+		if err := a.startOutputMonitor(); err != nil {
+			a.settings.MonitorEnabled = false
+			a.message = "Salida RX cambiada, pero MON falló: " + err.Error()
+			return
+		}
+	}
+	a.message = "Salida RX predeterminada → " + a.defaultOutputName
+	a.save()
+}
+
 func (a *app) updateDeviceMenu(mouse rl.Vector2) {
 	devices := a.inputs
 	x := float32(30)
 	selector := rl.NewRectangle(30, 92, 710, 64)
+	includeWindowsDefault := false
 	if a.openDeviceMenu == 1 {
 		devices, x, selector = a.outputs, 860, rl.NewRectangle(860, 92, 710, 64)
+		includeWindowsDefault = a.mode == "rx"
 	}
-	visible := min(8, len(devices))
-	maxScroll := max(0, len(devices)-visible)
+	count := len(devices)
+	if includeWindowsDefault {
+		count++
+	}
+	visible := min(8, count)
+	maxScroll := max(0, count-visible)
 	if wheel := rl.GetMouseWheelMove(); wheel != 0 {
 		a.deviceMenuScroll = max(0, min(maxScroll, a.deviceMenuScroll-int(math.Copysign(1, float64(wheel)))))
 	}
@@ -606,11 +781,22 @@ func (a *app) updateDeviceMenu(mouse rl.Vector2) {
 		if rl.CheckCollisionPointRec(mouse, list) {
 			row := int((mouse.Y - list.Y - 4) / 44)
 			if row >= 0 && row < visible {
-				index := a.deviceMenuScroll + row
+				itemIndex := a.deviceMenuScroll + row
 				if a.openDeviceMenu == 0 {
-					a.inIndex = index
+					a.inIndex = itemIndex
+				} else if includeWindowsDefault && itemIndex == 0 {
+					a.settings.RXFollowDefault = true
+					a.outIndex = defaultDeviceIndex(a.outputs)
+					a.defaultOutputName = deviceName(a.outputs, a.outIndex)
+					a.lastDefaultEndpointName = ""
 				} else {
-					a.outIndex = index
+					deviceIndex := itemIndex
+					if includeWindowsDefault {
+						deviceIndex--
+						a.settings.RXFollowDefault = false
+						a.defaultOutputName = ""
+					}
+					a.outIndex = deviceIndex
 				}
 				a.openDeviceMenu = -1
 				a.reconnectAudio()
@@ -710,8 +896,8 @@ func shiftDown() bool { return rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.
 
 func (a *app) updateCutoffs(mouse rl.Vector2) {
 	graph := rl.NewRectangle(98, 195, 1454, 148)
-	lowX := graph.X + float32(a.config.LowCutHz/10000)*graph.Width
-	highX := graph.X + float32(a.config.HighCutHz/10000)*graph.Width
+	lowX := spectrumFrequencyX(graph, a.config.LowCutHz)
+	highX := spectrumFrequencyX(graph, a.config.HighCutHz)
 	if rl.IsMouseButtonPressed(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, graph) {
 		lowDistance := float32(math.Abs(float64(mouse.X - lowX)))
 		highDistance := float32(math.Abs(float64(mouse.X - highX)))
@@ -724,9 +910,9 @@ func (a *app) updateCutoffs(mouse rl.Vector2) {
 		}
 	}
 	if a.cutoffDrag >= 0 && rl.IsMouseButtonDown(rl.MouseLeftButton) {
-		hz := math.Round(float64((mouse.X-graph.X)/graph.Width*10000)/10) * 10
+		hz := math.Round(spectrumXFrequency(graph, mouse.X)/10) * 10
 		if a.cutoffDrag == 0 {
-			a.config.LowCutHz = max(20, min(a.config.HighCutHz-50, hz))
+			a.config.LowCutHz = max(spectrumMinHz, min(a.config.HighCutHz-50, hz))
 		} else {
 			a.config.HighCutHz = max(a.config.LowCutHz+50, min(10000, hz))
 		}
@@ -740,9 +926,9 @@ func (a *app) updateNotchFromSpectrum(mouse rl.Vector2) {
 		return
 	}
 	graph := rl.NewRectangle(98, 195, 1454, 148)
-	centerX := graph.X + float32(a.config.Notch.FrequencyHz/10000)*graph.Width
-	halfWidthX := float32(a.config.Notch.WidthHz/20000) * graph.Width
-	leftX, rightX := centerX-halfWidthX, centerX+halfWidthX
+	centerX := spectrumFrequencyX(graph, a.config.Notch.FrequencyHz)
+	leftX := spectrumFrequencyX(graph, a.config.Notch.FrequencyHz-a.config.Notch.WidthHz/2)
+	rightX := spectrumFrequencyX(graph, a.config.Notch.FrequencyHz+a.config.Notch.WidthHz/2)
 	if rl.IsMouseButtonPressed(rl.MouseLeftButton) && a.cutoffDrag < 0 && rl.CheckCollisionPointRec(mouse, graph) {
 		distances := []float32{
 			float32(math.Abs(float64(mouse.X - centerX))),
@@ -760,7 +946,7 @@ func (a *app) updateNotchFromSpectrum(mouse rl.Vector2) {
 		}
 	}
 	if a.notchDrag >= 0 && rl.IsMouseButtonDown(rl.MouseLeftButton) {
-		hz := max(20.0, min(8000.0, float64((mouse.X-graph.X)/graph.Width*10000)))
+		hz := max(spectrumMinHz, min(8000.0, spectrumXFrequency(graph, mouse.X)))
 		switch a.notchDrag {
 		case 0:
 			a.config.Notch.FrequencyHz = math.Round(hz/5) * 5
@@ -772,7 +958,7 @@ func (a *app) updateNotchFromSpectrum(mouse rl.Vector2) {
 		a.config.Notch.Enabled = true
 		a.applyDSPAndSave()
 	}
-	if rl.CheckCollisionPointRec(mouse, graph) && math.Abs(float64(mouse.X-centerX)) <= float64(max(20, halfWidthX+12)) {
+	if rl.CheckCollisionPointRec(mouse, graph) && mouse.X >= leftX-12 && mouse.X <= rightX+12 {
 		if wheel := rl.GetMouseWheelMove(); wheel != 0 {
 			if shiftDown() {
 				a.config.Notch.DepthDB = max(-60, min(-6, a.config.Notch.DepthDB-float64(wheel)*2))
@@ -786,11 +972,11 @@ func (a *app) updateNotchFromSpectrum(mouse rl.Vector2) {
 }
 
 func (a *app) updateEQ(mouse rl.Vector2) {
-	graph := rl.NewRectangle(330, 680, 850, 170)
+	graph := eqGraphRectangle()
 	if rl.IsMouseButtonPressed(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, graph) {
 		best, distance := 0, float32(1e9)
 		for i := 0; i < audio.EQBandCount; i++ {
-			x := graph.X + float32(i)*graph.Width/float32(audio.EQBandCount-1)
+			x := eqBandX(graph, i)
 			if d := float32(math.Abs(float64(mouse.X - x))); d < distance {
 				best, distance = i, d
 			}
@@ -803,11 +989,11 @@ func (a *app) updateEQ(mouse rl.Vector2) {
 		a.config.EQEnabled = true
 		a.applyDSPAndSave()
 	}
-	if clicked(mouse, rl.NewRectangle(1230, 820, 150, 44)) {
+	if clicked(mouse, rl.NewRectangle(1130, 654, 190, 42)) {
 		a.config.EQGainsDB = [audio.EQBandCount]float64{}
 		a.applyDSPAndSave()
 	}
-	if clicked(mouse, rl.NewRectangle(1390, 820, 150, 44)) {
+	if clicked(mouse, rl.NewRectangle(1330, 654, 190, 42)) {
 		a.config.EQEnabled = !a.config.EQEnabled
 		a.applyDSPAndSave()
 	}
@@ -821,14 +1007,14 @@ func (a *app) updatePanelControls(mouse rl.Vector2) {
 	if a.activeTab == 3 {
 		speeds := []audio.NoiseSpeed{audio.NoiseSlow, audio.NoiseNormal, audio.NoiseFast}
 		for i, speed := range speeds {
-			if clicked(mouse, rl.NewRectangle(float32(1200+i*115), 765, 105, 46)) {
+			if clicked(mouse, rl.NewRectangle(float32(1200+i*115), 742, 105, 42)) {
 				a.config.NoiseSpeed = speed
 				a.config.NoiseEnabled = true
 				a.applyDSPAndSave()
 			}
 		}
 	}
-	slider := rl.NewRectangle(270, 780, 900, 42)
+	slider := rl.NewRectangle(270, 753, 900, 42)
 	if rl.IsMouseButtonPressed(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, slider) {
 		a.controlDrag = a.activeTab
 	}
@@ -866,9 +1052,9 @@ func (a *app) updateEchoControls(mouse rl.Vector2) {
 		changed = true
 	}
 	toneRects := []rl.Rectangle{
-		rl.NewRectangle(95, 826, 150, 36),
-		rl.NewRectangle(260, 826, 150, 36),
-		rl.NewRectangle(425, 826, 150, 36),
+		rl.NewRectangle(95, 810, 150, 30),
+		rl.NewRectangle(260, 810, 150, 30),
+		rl.NewRectangle(425, 810, 150, 30),
 	}
 	tones := []audio.EchoTone{audio.EchoDark, audio.EchoNeutral, audio.EchoBright}
 	for i, r := range toneRects {
@@ -879,9 +1065,9 @@ func (a *app) updateEchoControls(mouse rl.Vector2) {
 		}
 	}
 	presetRects := []rl.Rectangle{
-		rl.NewRectangle(690, 826, 140, 36),
-		rl.NewRectangle(845, 826, 140, 36),
-		rl.NewRectangle(1000, 826, 140, 36),
+		rl.NewRectangle(690, 810, 140, 30),
+		rl.NewRectangle(845, 810, 140, 30),
+		rl.NewRectangle(1000, 810, 140, 30),
 	}
 	presets := [][3]float64{{80, 8, 8}, {140, 15, 12}, {260, 25, 18}}
 	for i, r := range presetRects {
@@ -892,10 +1078,10 @@ func (a *app) updateEchoControls(mouse rl.Vector2) {
 		}
 	}
 	tracks := []rl.Rectangle{
-		rl.NewRectangle(365, 714, 775, 26),
-		rl.NewRectangle(365, 754, 775, 26),
-		rl.NewRectangle(365, 794, 775, 26),
-		rl.NewRectangle(1260, 800, 250, 30),
+		rl.NewRectangle(365, 700, 775, 24),
+		rl.NewRectangle(365, 738, 775, 24),
+		rl.NewRectangle(365, 776, 775, 24),
+		rl.NewRectangle(1260, 780, 250, 28),
 	}
 	if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
 		for i, track := range tracks {
@@ -946,7 +1132,7 @@ func (a *app) updateRXEmphasis(mouse rl.Vector2) {
 			changed = true
 		}
 	}
-	slider := rl.NewRectangle(900, 794, 500, 34)
+	slider := rl.NewRectangle(900, 780, 500, 34)
 	if a.settings.RXEmphasisMode == "ssb" && rl.IsMouseButtonDown(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, slider) {
 		a.settings.RXEmphasisMix = math.Round(max(0.0, min(100.0, float64((mouse.X-slider.X)/slider.Width*100)))/5) * 5
 		a.settings.RXEmphasis = true
@@ -972,6 +1158,53 @@ func applyRXEmphasis(config *audio.Config, enabled bool, profile string, amount 
 	default:
 		config.SSBClarityDB = max(0, min(100, amount)) * 9 / 100
 	}
+}
+
+func (a *app) updateTXFilterControls(mouse rl.Vector2) {
+	if a.mode != "tx" || a.activeTab != 0 {
+		return
+	}
+	if clicked(mouse, txFilterToggleRectangle()) {
+		a.settings.FiltersEnabled = !a.settings.FiltersEnabled
+		a.applyDSPAndSave()
+	}
+	if clicked(mouse, txToneToggleRectangle()) {
+		enabled := !a.txSignal.enabled.Load()
+		a.txSignal.enabled.Store(enabled)
+		if enabled {
+			a.message = fmt.Sprintf("Tono de prueba TX: %.0f Hz a -20 dBFS", a.settings.TestToneHz)
+		} else {
+			a.message = "Tono de prueba desactivado"
+		}
+	}
+	if clicked(mouse, txFadeToggleRectangle()) {
+		a.settings.TXFadeEnabled = !a.settings.TXFadeEnabled
+		a.save()
+	}
+	if rl.IsMouseButtonDown(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, expandedSliderHitbox(txToneSliderRectangle())) {
+		percent := sliderPercent(mouse.X, txToneSliderRectangle())
+		a.settings.TestToneHz = math.Round(percent*500) * 10
+		a.txSignal.frequencyHz.Store(int64(a.settings.TestToneHz))
+		a.save()
+	}
+	if rl.IsMouseButtonDown(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, expandedSliderHitbox(txFadeSliderRectangle())) {
+		percent := sliderPercent(mouse.X, txFadeSliderRectangle())
+		a.settings.TXFadeMS = math.Round(percent*300) * 10
+		a.save()
+	}
+	if rl.IsMouseButtonDown(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, expandedSliderHitbox(txPresenceSliderRectangle())) {
+		percent := sliderPercent(mouse.X, txPresenceSliderRectangle())
+		a.config.TXPresenceDB = math.Round(percent*20) / 20 * 9
+		a.applyDSPAndSave()
+	}
+}
+
+func expandedSliderHitbox(slider rl.Rectangle) rl.Rectangle {
+	return rl.NewRectangle(slider.X-10, slider.Y-10, slider.Width+20, slider.Height+20)
+}
+
+func sliderPercent(x float32, slider rl.Rectangle) float64 {
+	return max(0.0, min(1.0, float64((x-slider.X)/slider.Width)))
 }
 
 func (a *app) toggleActiveSection() {
@@ -1043,8 +1276,12 @@ func (a *app) draw(mouse rl.Vector2) {
 	if a.mode == "rx" {
 		inputLabel, outputLabel = "ENTRADA DESDE EMISORA", "ALTAVOCES"
 	}
+	outputValue := deviceName(a.outputs, a.outIndex)
+	if a.mode == "rx" && a.settings.RXFollowDefault {
+		outputValue = "WINDOWS → " + outputValue
+	}
 	drawSelector(30, 92, 710, inputLabel, deviceName(a.inputs, a.inIndex), mouse)
-	drawSelector(860, 92, 710, outputLabel, deviceName(a.outputs, a.outIndex), mouse)
+	drawSelector(860, 92, 710, outputLabel, outputValue, mouse)
 	a.drawSpectrum(30, 175, 1540, 190)
 	a.drawMeters(status)
 	if a.mode == "tx" {
@@ -1055,7 +1292,7 @@ func (a *app) draw(mouse rl.Vector2) {
 	a.drawTabs(mouse)
 	a.drawDSPPanel()
 	if a.message != "" {
-		drawText(a.message, 30, 875, 18, color.muted)
+		drawText(a.message, 35, 870, 18, dspColor.muted)
 	}
 	if a.openDeviceMenu >= 0 {
 		a.drawDeviceMenu(mouse)
@@ -1068,10 +1305,23 @@ func (a *app) draw(mouse rl.Vector2) {
 func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 	devices := a.inputs
 	selected, x := a.inIndex, float32(30)
+	includeWindowsDefault := false
 	if a.openDeviceMenu == 1 {
 		devices, selected, x = a.outputs, a.outIndex, 860
+		includeWindowsDefault = a.mode == "rx"
+		if includeWindowsDefault {
+			if a.settings.RXFollowDefault {
+				selected = 0
+			} else {
+				selected++
+			}
+		}
 	}
-	visible := min(8, len(devices))
+	count := len(devices)
+	if includeWindowsDefault {
+		count++
+	}
+	visible := min(8, count)
 	panel := rl.NewRectangle(x, 160, 710, float32(visible*44+8))
 	rl.DrawRectangleRounded(panel, .04, 8, rl.NewColor(10, 23, 34, 255))
 	rl.DrawRectangleRoundedLines(panel, .04, 8, color.cyan)
@@ -1083,9 +1333,16 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 		} else if rl.CheckCollisionPointRec(mouse, item) {
 			rl.DrawRectangleRounded(item, .08, 5, rl.NewColor(27, 46, 61, 255))
 		}
-		label := devices[index].Name
-		if devices[index].IsDefault {
-			label += "  ·  PREDETERMINADO"
+		label := "PREDETERMINADO DE WINDOWS → " + deviceName(devices, defaultDeviceIndex(devices))
+		if !includeWindowsDefault || index > 0 {
+			deviceIndex := index
+			if includeWindowsDefault {
+				deviceIndex--
+			}
+			label = devices[deviceIndex].Name
+			if devices[deviceIndex].IsDefault {
+				label += "  ·  ACTUAL DE WINDOWS"
+			}
 		}
 		drawText(ellipsis(label, 58), int32(x+20), int32(item.Y+9), 17, color.text)
 		if index == selected {
@@ -1095,13 +1352,14 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 	if a.deviceMenuScroll > 0 {
 		drawText("▲", int32(x+675), 165, 14, color.amber)
 	}
-	if a.deviceMenuScroll+visible < len(devices) {
+	if a.deviceMenuScroll+visible < count {
 		drawText("▼", int32(x+675), int32(panel.Y+panel.Height-23), 14, color.amber)
 	}
 }
 
 func drawHeader(a *app, status audioio.Status) {
 	drawMilitaryText("IC-RADIO", 38, 18, 42, rl.NewColor(18, 23, 25, 255))
+	drawButton(onTopButtonRectangle(), "ON TOP", a.settings.AlwaysOnTop)
 	connected := a.ptt.Connected()
 	dot := color.amber
 	state := "PTT SIN CONECTAR"
@@ -1161,8 +1419,13 @@ func drawSelector(x, y, w float32, label, value string, mouse rl.Vector2) {
 func (a *app) drawSpectrum(x, y, w, h float32) {
 	r := rl.NewRectangle(x, y, w, h)
 	drawInsetPanel(r, .04)
-	for i := 0; i <= 8; i++ {
-		xx := x + 68 + float32(i)*(w-86)/8
+	graph := rl.NewRectangle(x+68, y+20, w-86, h-42)
+	frequencyLabels := []struct {
+		hz    float64
+		label string
+	}{{100, "100 Hz"}, {500, "500 Hz"}, {1000, "1 kHz"}, {2000, "2 kHz"}, {3000, "3 kHz"}, {5000, "5 kHz"}, {10000, "10 kHz"}}
+	for _, tick := range frequencyLabels {
+		xx := spectrumFrequencyX(graph, tick.hz)
 		rl.DrawLine(int32(xx), int32(y+18), int32(xx), int32(y+h-22), rl.NewColor(24, 60, 78, 255))
 	}
 	for i := 0; i <= 6; i++ {
@@ -1170,26 +1433,57 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 		rl.DrawLine(int32(x+65), int32(yy), int32(x+w-18), int32(yy), rl.NewColor(30, 69, 87, 255))
 		drawText(fmt.Sprintf("%d dB", -i*10), int32(x+12), int32(yy-9), 15, color.muted)
 	}
-	base := y + h - 22
-	barW := (w - 90) / float32(len(a.spectrum))
-	for i, value := range a.spectrum {
-		norm := float32(math.Max(0, math.Min(1, float64((value+80)/80))))
-		bh := norm * (h - 55)
-		xx := x + 68 + float32(i)*barW
-		brightHeight := bh * .42
-		rl.DrawRectangle(int32(xx), int32(base-bh), max(2, int32(barW-1)), int32(brightHeight), rl.NewColor(29, 235, 247, 245))
-		rl.DrawRectangle(int32(xx), int32(base-bh+brightHeight), max(2, int32(barW-1)), int32(bh-brightHeight), rl.NewColor(0, 151, 183, 235))
-		if bh > 3 {
-			rl.DrawRectangle(int32(xx), int32(base-bh), max(2, int32(barW-1)), 2, rl.NewColor(175, 252, 255, 255))
+	a.updateSpectrumDisplay(float32(rl.GetFrameTime()))
+	base := graph.Y + graph.Height
+	step := graph.Width / spectrumVisualBars
+	barWidth := max(float32(3), step*.68)
+	plotHeight := graph.Height
+	points := make([]rl.Vector2, spectrumVisualBars)
+	for i := 0; i < spectrumVisualBars; i++ {
+		xx := graph.X + (float32(i)+.5)*step
+		averageY := spectrumDBY(base, plotHeight, a.spectrumAverage[i])
+		if averageY < base {
+			rl.DrawRectangle(int32(xx-barWidth*.46), int32(averageY), max(2, int32(barWidth*.92)), int32(base-averageY), rl.NewColor(83, 48, 146, 48))
+		}
+
+		value := max(float32(-60), min(float32(0), a.spectrumDisplay[i]))
+		topY := spectrumDBY(base, plotHeight, value)
+		points[i] = rl.NewVector2(xx, topY)
+		for segmentDB := float32(-60); segmentDB < value; segmentDB += 5 {
+			segmentTop := min(value, segmentDB+5)
+			segmentY := spectrumDBY(base, plotHeight, segmentTop)
+			segmentBottom := spectrumDBY(base, plotHeight, segmentDB)
+			segmentHeight := max(float32(2), segmentBottom-segmentY-2)
+			segmentColor := spectrumSegmentColor(segmentTop)
+			rl.DrawRectangle(int32(xx-barWidth/2), int32(segmentY), max(2, int32(barWidth)), int32(segmentHeight), segmentColor)
+		}
+		if value > -60 {
+			rl.DrawRectangle(int32(xx-barWidth*.7), int32(topY-2), max(2, int32(barWidth*1.4)), 4, rl.NewColor(26, 229, 246, 38))
+		}
+
+		peak := max(float32(-60), min(float32(0), a.spectrumPeak[i]))
+		peakY := spectrumDBY(base, plotHeight, peak)
+		if peak > -60 {
+			rl.DrawRectangle(int32(xx-barWidth/2), int32(peakY-1), max(2, int32(barWidth)), 2, rl.NewColor(255, 190, 40, 230))
 		}
 	}
-	labels := []string{"100 Hz", "500 Hz", "1 kHz", "2 kHz", "3 kHz", "5 kHz", "10 kHz"}
-	for i, label := range labels {
-		drawText(label, int32(x+70+float32(i)*(w-150)/6), int32(y+h-20), 14, color.muted)
+	for i := 1; i < len(points); i++ {
+		rl.DrawLineEx(points[i-1], points[i], 6, rl.NewColor(20, 218, 236, 28))
+	}
+	for i := 1; i < len(points); i++ {
+		rl.DrawLineEx(points[i-1], points[i], 2, rl.NewColor(120, 245, 255, 220))
+	}
+	for _, tick := range frequencyLabels {
+		xx := spectrumFrequencyX(graph, tick.hz)
+		labelX := xx - 22
+		if tick.hz == spectrumMaxHz {
+			labelX = xx - 52
+		}
+		drawText(tick.label, int32(labelX), int32(y+h-20), 14, color.muted)
 	}
 	graphX, graphW := x+68, w-86
-	lowX := graphX + float32(a.config.LowCutHz/10000)*graphW
-	highX := graphX + float32(a.config.HighCutHz/10000)*graphW
+	lowX := spectrumFrequencyX(graph, a.config.LowCutHz)
+	highX := spectrumFrequencyX(graph, a.config.HighCutHz)
 	if a.settings.FiltersEnabled {
 		rl.DrawRectangle(int32(graphX), int32(y+20), int32(max(0, lowX-graphX)), int32(h-42), rl.NewColor(2, 7, 12, 155))
 		rl.DrawRectangle(int32(highX), int32(y+20), int32(max(0, graphX+graphW-highX)), int32(h-42), rl.NewColor(2, 7, 12, 155))
@@ -1199,9 +1493,9 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 		drawText(fmt.Sprintf("%.0f Hz", a.config.HighCutHz), int32(highX+7), int32(y+23), 14, color.amber)
 	}
 	if a.mode == "rx" {
-		centerX := graphX + float32(a.config.Notch.FrequencyHz/10000)*graphW
-		halfWidthX := float32(a.config.Notch.WidthHz/20000) * graphW
-		leftX, rightX := max(graphX, centerX-halfWidthX), min(graphX+graphW, centerX+halfWidthX)
+		centerX := spectrumFrequencyX(graph, a.config.Notch.FrequencyHz)
+		leftX := spectrumFrequencyX(graph, a.config.Notch.FrequencyHz-a.config.Notch.WidthHz/2)
+		rightX := spectrumFrequencyX(graph, a.config.Notch.FrequencyHz+a.config.Notch.WidthHz/2)
 		fillAlpha, lineAlpha := uint8(40), uint8(105)
 		if a.config.Notch.Enabled {
 			fillAlpha, lineAlpha = 95, 255
@@ -1219,6 +1513,58 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 	}
 }
 
+func (a *app) updateSpectrumDisplay(dt float32) {
+	if len(a.spectrumDisplay) != spectrumVisualBars {
+		a.spectrumDisplay = make([]float32, spectrumVisualBars)
+		a.spectrumAverage = make([]float32, spectrumVisualBars)
+		a.spectrumPeak = make([]float32, spectrumVisualBars)
+		a.spectrumPeakHold = make([]float32, spectrumVisualBars)
+		for i := 0; i < spectrumVisualBars; i++ {
+			a.spectrumDisplay[i], a.spectrumAverage[i], a.spectrumPeak[i] = -80, -80, -80
+		}
+	}
+	dt = max(float32(0), min(float32(.1), dt))
+	attack := float32(1 - math.Exp(-float64(dt)/.035))
+	decay := float32(1 - math.Exp(-float64(dt)/.22))
+	averageRate := float32(1 - math.Exp(-float64(dt)/1.4))
+	for i := 0; i < spectrumVisualBars; i++ {
+		position := float32(i) / float32(spectrumVisualBars-1)
+		target := max(float32(-80), min(float32(0), spectrumLevelAt(a.spectrum, spectrumPositionFrequency(position))))
+		rate := decay
+		if target > a.spectrumDisplay[i] {
+			rate = attack
+		}
+		a.spectrumDisplay[i] += (target - a.spectrumDisplay[i]) * rate
+		a.spectrumAverage[i] += (target - a.spectrumAverage[i]) * averageRate
+		if a.spectrumDisplay[i] >= a.spectrumPeak[i] {
+			a.spectrumPeak[i] = a.spectrumDisplay[i]
+			a.spectrumPeakHold[i] = .5
+		} else if a.spectrumPeakHold[i] > 0 {
+			a.spectrumPeakHold[i] -= dt
+		} else {
+			a.spectrumPeak[i] = max(a.spectrumDisplay[i], a.spectrumPeak[i]-32*dt)
+		}
+	}
+}
+
+func spectrumDBY(base, height, db float32) float32 {
+	db = max(float32(-60), min(float32(0), db))
+	return base - (db+60)/60*height
+}
+
+func spectrumSegmentColor(db float32) rl.Color {
+	switch {
+	case db >= -10:
+		return rl.NewColor(255, 93, 78, 245)
+	case db >= -25:
+		return rl.NewColor(255, 190, 40, 245)
+	case db >= -40:
+		return rl.NewColor(52, 230, 105, 245)
+	default:
+		return rl.NewColor(20, 218, 236, 240)
+	}
+}
+
 func (a *app) drawEmphasisCurve(graph rl.Rectangle) {
 	if !a.settings.RXEmphasis {
 		return
@@ -1227,14 +1573,15 @@ func (a *app) drawEmphasisCurve(graph rl.Rectangle) {
 	baseline := graph.Y + graph.Height*.42
 	var previous rl.Vector2
 	for i := 0; i <= 80; i++ {
-		frequency := 20 + float64(i)/80*9980
+		position := float32(i) / 80
+		frequency := spectrumPositionFrequency(position)
 		cfg := audio.DefaultConfig()
 		cfg.LowCutHz, cfg.HighCutHz, cfg.EQEnabled, cfg.Notch.Enabled = 20, audio.DefaultSampleRate*.45, false, false
 		applyRXEmphasis(&cfg, true, a.settings.RXEmphasisMode, a.settings.RXEmphasisMix)
 		off := cfg
 		applyRXEmphasis(&off, false, a.settings.RXEmphasisMode, a.settings.RXEmphasisMix)
 		db := audio.ResponseDB(cfg, audio.DefaultSampleRate, frequency) - audio.ResponseDB(off, audio.DefaultSampleRate, frequency)
-		point := rl.NewVector2(graph.X+float32(i)/80*graph.Width, baseline-float32(db)*3.2)
+		point := rl.NewVector2(graph.X+position*graph.Width, baseline-float32(db)*3.2)
 		if i > 0 {
 			rl.DrawLineEx(previous, point, 3, curveColor)
 		}
@@ -1444,7 +1791,7 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 		labels[4] = "EFECTOS"
 	}
 	for i, label := range labels {
-		r := rl.NewRectangle(float32(20+i*312), 590, 300, 56)
+		r := tabRectangle(i)
 		active := i == a.activeTab
 		fill := rl.NewColor(27, 31, 32, 255)
 		hovered := rl.CheckCollisionPointRec(mouse, r)
@@ -1486,12 +1833,12 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 }
 
 func (a *app) drawDSPPanel() {
-	r := rl.NewRectangle(20, 650, 1560, 220)
-	drawInsetPanel(r, .04)
-	if a.mode == "tx" && a.activeTab != 4 {
-		drawButton(rl.NewRectangle(1170, 665, 180, 46), "TONO 1 kHz", a.txSignal.enabled.Load())
+	r := rl.NewRectangle(35, 650, 1530, 210)
+	drawMetalControlPanel(r)
+	if a.mode == "tx" && a.activeTab != 0 && a.activeTab != 4 {
+		drawButton(toneButtonRectangle(a.activeTab), "TONO 1 kHz", a.txSignal.enabled.Load())
 	}
-	if !(a.mode == "tx" && a.activeTab == 4) {
+	if a.activeTab != 1 && !(a.mode == "tx" && (a.activeTab == 0 || a.activeTab == 4)) {
 		drawSectionToggle(a.sectionEnabled(a.activeTab))
 	}
 	switch a.activeTab {
@@ -1517,107 +1864,168 @@ func (a *app) drawDSPPanel() {
 }
 
 func (a *app) drawFilters() {
-	drawText("PASO DE BANDA PARA VOZ", 55, 680, 25, color.amber)
-	drawText(fmt.Sprintf("Corte inferior: %.0f Hz", a.config.LowCutHz), 55, 730, 22, color.text)
-	drawText(fmt.Sprintf("Corte superior: %.0f Hz", a.config.HighCutHz), 55, 775, 22, color.text)
-	drawText("Arrastra las líneas ámbar sobre el espectro.", 55, 835, 18, color.muted)
-	if a.mode == "rx" {
-		a.drawRXEmphasisControls()
+	if a.mode == "tx" {
+		a.drawTXFilterControls()
+		return
 	}
+	drawText("PASO DE BANDA PARA VOZ", 55, 680, 25, dspColor.amber)
+	drawText(fmt.Sprintf("Corte inferior: %.0f Hz", a.config.LowCutHz), 55, 720, 22, dspColor.text)
+	drawText(fmt.Sprintf("Corte superior: %.0f Hz", a.config.HighCutHz), 55, 755, 22, dspColor.text)
+	drawText("Arrastra las líneas ámbar sobre el espectro.", 55, 810, 18, dspColor.muted)
+	a.drawRXEmphasisControls()
+}
+
+func (a *app) drawTXFilterControls() {
+	drawRecessedControlWell(rl.NewRectangle(45, 662, 520, 184), false)
+	drawText("PASO DE BANDA PARA VOZ", 65, 680, 22, dspColor.amber)
+	drawButton(txFilterToggleRectangle(), "ACTIVADO", a.settings.FiltersEnabled)
+	rl.DrawLine(65, 718, 545, 718, rl.NewColor(110, 117, 118, 180))
+	drawText(fmt.Sprintf("Corte inferior: %.0f Hz", a.config.LowCutHz), 65, 730, 20, dspColor.text)
+	drawText(fmt.Sprintf("Corte superior: %.0f Hz", a.config.HighCutHz), 65, 765, 20, dspColor.text)
+	rl.DrawLine(65, 802, 545, 802, rl.NewColor(110, 117, 118, 180))
+	drawText("Arrastra las líneas ámbar sobre el espectro.", 65, 812, 16, dspColor.muted)
+
+	drawRecessedControlWell(rl.NewRectangle(575, 662, 975, 56), false)
+	drawText("GENERADOR DE TONO", 590, 674, 18, dspColor.amber)
+	drawButton(txToneToggleRectangle(), "TONO", a.txSignal.enabled.Load())
+	drawControlValue(rl.NewRectangle(945, 670, 140, 38), formatToneFrequency(a.settings.TestToneHz))
+	drawText("0 Hz", 1095, 675, 14, dspColor.text)
+	drawMechanicalSlider(txToneSliderRectangle(), a.settings.TestToneHz/5000*100, controlColor.active)
+	drawText("5 kHz", 1510, 675, 14, dspColor.text)
+
+	drawRecessedControlWell(rl.NewRectangle(575, 722, 975, 56), false)
+	drawText("FADE ON PTT", 590, 731, 18, dspColor.amber)
+	drawText("Entrada progresiva de audio al iniciar TX", 590, 753, 14, dspColor.text)
+	drawButton(txFadeToggleRectangle(), "ACTIVADO", a.settings.TXFadeEnabled)
+	drawControlValue(rl.NewRectangle(945, 730, 140, 38), fmt.Sprintf("%.0f ms", a.settings.TXFadeMS))
+	drawText("0 ms", 1095, 735, 14, dspColor.text)
+	drawMechanicalSlider(txFadeSliderRectangle(), a.settings.TXFadeMS/3000*100, controlColor.active)
+	drawText("3000 ms", 1490, 735, 14, dspColor.text)
+
+	drawRecessedControlWell(rl.NewRectangle(575, 782, 975, 64), false)
+	drawText("PRESENCIA TX", 590, 791, 18, dspColor.amber)
+	drawText("Realce amplio desde 1,8 kHz", 590, 815, 14, dspColor.text)
+	drawControlValue(rl.NewRectangle(945, 790, 140, 42), fmt.Sprintf("%+.1f dB", a.config.TXPresenceDB))
+	drawText("0 dB", 1095, 797, 14, dspColor.text)
+	drawMechanicalSlider(txPresenceSliderRectangle(), a.config.TXPresenceDB/9*100, controlColor.active)
+	drawText("+9 dB", 1510, 797, 14, dspColor.text)
+}
+
+func drawControlValue(r rl.Rectangle, value string) {
+	drawDarkDisplay(r)
+	drawCentered(value, r, 18, color.text, 0)
+}
+
+func formatToneFrequency(hz float64) string {
+	if hz >= 1000 {
+		return fmt.Sprintf("%.2f kHz", hz/1000)
+	}
+	return fmt.Sprintf("%.0f Hz", hz)
 }
 
 func (a *app) drawRXEmphasisControls() {
-	rl.DrawLine(775, 675, 775, 850, color.border)
-	drawText("ÉNFASIS RX", 810, 742, 22, color.amber)
+	rl.DrawLine(775, 675, 775, 825, dspColor.border)
+	drawText("ÉNFASIS RX", 810, 730, 22, dspColor.amber)
 	drawButton(rl.NewRectangle(810, 684, 165, 42), "ACTIVADO", a.settings.RXEmphasis)
 	profiles := []struct{ key, label string }{{"ssb", "SSB"}, {"fm50", "FM 50 µs"}, {"fm75", "FM 75 µs"}}
 	for i, profile := range profiles {
 		drawButton(rl.NewRectangle(float32(970+i*135), 684, 125, 42), profile.label, a.settings.RXEmphasisMode == profile.key)
 	}
 	if a.settings.RXEmphasisMode == "ssb" {
-		drawText(fmt.Sprintf("Presencia SSB: %.0f %%", a.settings.RXEmphasisMix), 810, 775, 17, color.muted)
-		drawCompactSlider(rl.NewRectangle(900, 803, 500, 14), a.settings.RXEmphasisMix)
-		drawText("0 %", 810, 797, 15, color.muted)
-		drawText("100 %", 1415, 797, 15, color.muted)
+		drawText(fmt.Sprintf("Presencia SSB: %.0f %%", a.settings.RXEmphasisMix), 810, 765, 17, dspColor.muted)
+		drawRecessedControlWell(rl.NewRectangle(875, 782, 555, 34), false)
+		drawCompactSlider(rl.NewRectangle(900, 790, 500, 14), a.settings.RXEmphasisMix)
+		drawText("0 %", 810, 784, 15, dspColor.muted)
+		drawText("100 %", 1415, 784, 15, dspColor.muted)
 	} else {
-		drawText("Deénfasis FM normalizado · intensidad fija", 810, 790, 18, color.muted)
-		drawText("La curva violeta muestra la respuesta aplicada.", 810, 830, 17, color.text)
+		drawText("Deénfasis FM normalizado · intensidad fija", 810, 775, 18, dspColor.muted)
+		drawText("La curva violeta muestra la respuesta aplicada.", 810, 810, 17, dspColor.text)
 	}
 }
 
 func drawCompactSlider(track rl.Rectangle, percent float64) {
+	drawCompactSliderColor(track, percent, rl.NewColor(191, 112, 255, 255))
+}
+
+func drawCompactSliderColor(track rl.Rectangle, percent float64, active rl.Color) {
 	percent = max(0, min(100, percent))
-	rl.DrawRectangleRounded(track, .5, 8, rl.NewColor(44, 61, 73, 255))
-	fill := rl.NewRectangle(track.X, track.Y, track.Width*float32(percent/100), track.Height)
-	rl.DrawRectangleRounded(fill, .5, 8, rl.NewColor(191, 112, 255, 255))
-	x := track.X + track.Width*float32(percent/100)
-	rl.DrawCircle(int32(x), int32(track.Y+track.Height/2), 10, color.text)
-	rl.DrawCircle(int32(x), int32(track.Y+track.Height/2), 6, rl.NewColor(191, 112, 255, 255))
+	drawMechanicalSlider(track, percent, active)
 }
 
 func (a *app) drawEQ() {
-	graph := rl.NewRectangle(330, 680, 850, 170)
+	graph := eqGraphRectangle()
+	drawRecessedControlWell(rl.NewRectangle(42, 700, 1518, 132), true)
+	for _, frequency := range []float64{100, 500, 1000, 2000, 5000, 10000} {
+		x := spectrumFrequencyX(graph, frequency)
+		rl.DrawLine(int32(x), int32(graph.Y), int32(x), int32(graph.Y+graph.Height), rl.NewColor(37, 74, 83, 215))
+	}
 	for i := 0; i <= 4; i++ {
 		y := graph.Y + float32(i)*graph.Height/4
-		rl.DrawLine(int32(graph.X), int32(y), int32(graph.X+graph.Width), int32(y), rl.NewColor(47, 76, 91, 255))
-		drawText(fmt.Sprintf("%+d dB", 12-i*6), 260, int32(y-9), 15, color.muted)
+		rl.DrawLine(int32(graph.X), int32(y), int32(graph.X+graph.Width), int32(y), rl.NewColor(42, 70, 76, 220))
+		label := fmt.Sprintf("%+d dB", 12-i*6)
+		labelSize := readableSize(15)
+		labelWidth := rl.MeasureTextEx(interfaceFont(labelSize), label, float32(labelSize), fontSpacing(labelSize)).X
+		drawText(label, int32(graph.X-labelWidth-8), int32(y-9), 15, color.muted)
 	}
 	points := make([]rl.Vector2, audio.EQBandCount)
 	for i, gain := range a.config.EQGainsDB {
-		x := graph.X + float32(i)*graph.Width/float32(audio.EQBandCount-1)
+		x := eqBandX(graph, i)
 		y := graph.Y + float32((12-gain)/24)*graph.Height
 		points[i] = rl.NewVector2(x, y)
 		if i > 0 {
-			rl.DrawLineEx(points[i-1], points[i], 4, color.cyan)
+			rl.DrawLineEx(points[i-1], points[i], 8, rl.NewColor(controlColor.eqLine.R, controlColor.eqLine.G, controlColor.eqLine.B, 30))
+			rl.DrawLineEx(points[i-1], points[i], 3, controlColor.eqLine)
 		}
-		rl.DrawCircle(int32(x), int32(y), 8, color.text)
-		rl.DrawCircle(int32(x), int32(y), 5, color.cyan)
-		drawText(fmt.Sprintf("%.0f", audio.EQFrequencies[i]), int32(x-15), 852, 13, color.muted)
+		drawMechanicalHandle(x, y, controlColor.active, 10)
+		labelX := x - 18
+		if i == audio.EQBandCount-1 {
+			labelX = x - 34
+		}
+		drawText(formatEQFrequency(audio.EQFrequencies[i]), int32(labelX), int32(graph.Y+graph.Height+5), 13, color.muted)
 	}
-	drawText("ARRASTRA LOS PUNTOS", 1230, 710, 21, color.amber)
-	drawText("Ecualización de voz", 1230, 750, 20, color.text)
-	drawText("-12 a +12 dB", 1230, 785, 18, color.muted)
-	drawButton(rl.NewRectangle(1230, 820, 150, 44), "RESET EQ", false)
-	drawButton(rl.NewRectangle(1390, 820, 150, 44), "BYPASS", !a.config.EQEnabled)
+	drawText("ECUALIZADOR · 11 BANDAS · 100 Hz - 10 kHz", 55, 670, 20, dspColor.amber)
+	drawButton(rl.NewRectangle(1130, 654, 190, 42), "RESET EQ", false)
+	drawButton(rl.NewRectangle(1330, 654, 190, 42), "BYPASS", !a.config.EQEnabled)
 }
 
 func (a *app) drawCompressor() {
 	percent := (-(a.config.Compressor.TargetDBFS) - 6) / 24 * 100
-	drawText("COMPRESIÓN", 55, 680, 25, color.amber)
-	drawText("Pasos predefinidos: 0 · 20 · 40 · 60 · 80 · 100 %", 55, 730, 20, color.muted)
+	drawText("COMPRESIÓN", 55, 680, 25, dspColor.amber)
+	drawText("Pasos predefinidos: 0 · 20 · 40 · 60 · 80 · 100 %", 55, 715, 20, dspColor.muted)
 	drawValueSlider(percent, fmt.Sprintf("%.0f %%", percent), "SUAVE", "MÁXIMA")
-	drawText(fmt.Sprintf("Objetivo automático: %.0f dBFS", a.config.Compressor.TargetDBFS), 1210, 835, 19, color.text)
+	drawText(fmt.Sprintf("Objetivo automático: %.0f dBFS", a.config.Compressor.TargetDBFS), 1210, 810, 19, dspColor.text)
 }
 
 func (a *app) drawNotch() {
 	percent := (a.config.Notch.FrequencyHz - 100) / 3900 * 100
-	drawText("FILTRO NOTCH", 55, 680, 25, color.amber)
-	drawText("Arrastra el centro rojo y los bordes ámbar directamente sobre el espectro", 55, 730, 20, color.muted)
+	drawText("FILTRO NOTCH", 55, 680, 25, dspColor.amber)
+	drawText("Arrastra el centro rojo y los bordes ámbar directamente sobre el espectro", 55, 715, 20, dspColor.muted)
 	drawValueSlider(percent, fmt.Sprintf("%.0f Hz", a.config.Notch.FrequencyHz), "100 Hz", "4 kHz")
-	drawText(fmt.Sprintf("Ancho %.0f Hz · %.0f dB · Rueda: ancho · Shift+rueda: profundidad", a.config.Notch.WidthHz, a.config.Notch.DepthDB), 640, 835, 16, color.text)
+	drawCentered(fmt.Sprintf("Ancho %.0f Hz · %.0f dB · Rueda: ancho · Shift+rueda: profundidad", a.config.Notch.WidthHz, a.config.Notch.DepthDB), rl.NewRectangle(270, 822, 900, 18), 16, dspColor.text, 0)
 }
 
 func (a *app) drawNoiseReduction() {
-	drawText("REDUCCIÓN DE RUIDO", 55, 680, 25, color.amber)
-	drawText("Nivel de reducción", 55, 730, 20, color.muted)
+	drawText("REDUCCIÓN DE RUIDO", 55, 680, 25, dspColor.amber)
+	drawText("Nivel de reducción", 55, 715, 20, dspColor.muted)
 	drawValueSlider(a.config.NoiseStrength, fmt.Sprintf("%.0f %%", a.config.NoiseStrength), "0 %", "100 %")
-	drawText("INTEGRACIÓN", 1200, 720, 19, color.muted)
+	drawText("INTEGRACIÓN", 1200, 710, 19, dspColor.muted)
 	labels := []string{"LENTO", "MEDIO", "RÁPIDO"}
 	speeds := []audio.NoiseSpeed{audio.NoiseSlow, audio.NoiseNormal, audio.NoiseFast}
 	for i, label := range labels {
-		drawButton(rl.NewRectangle(float32(1200+i*115), 765, 105, 46), label, a.config.NoiseSpeed == speeds[i])
+		drawButton(rl.NewRectangle(float32(1200+i*115), 742, 105, 42), label, a.config.NoiseSpeed == speeds[i])
 	}
 }
 
 func (a *app) drawGain() {
 	percent := (a.config.OutputGainDB + 12) / 24 * 100
-	drawText("GANANCIA DE SALIDA", 55, 680, 25, color.amber)
-	drawText("Calibra el nivel enviado a la entrada de audio USB de la radio", 55, 730, 20, color.muted)
+	drawText("GANANCIA DE SALIDA", 55, 680, 25, dspColor.amber)
+	drawText("Calibra el nivel enviado a la entrada de audio USB de la radio", 55, 715, 20, dspColor.muted)
 	drawValueSlider(percent, fmt.Sprintf("%+.1f dB", a.config.OutputGainDB), "-12 dB", "+12 dB")
 }
 
 func (a *app) drawEffects() {
-	drawText("ECO TX", 95, 672, 25, color.text)
+	drawRecessedControlWell(rl.NewRectangle(75, 692, 1090, 110), false)
+	drawText("ECO TX", 95, 672, 25, dspColor.text)
 	box := rl.NewRectangle(55, 674, 28, 28)
 	boxFill, boxBorder := color.panel2, color.border
 	if a.config.Echo.Enabled {
@@ -1626,61 +2034,94 @@ func (a *app) drawEffects() {
 	rl.DrawRectangleRounded(box, .22, 6, boxFill)
 	rl.DrawRectangleRoundedLines(box, .22, 6, boxBorder)
 	if a.config.Echo.Enabled {
-		drawText("✓", 59, 673, 22, color.bg)
+		drawText("✓", 59, 673, 22, dspColor.text)
 	}
-	drawEffectTrack(714, "RETARDO", fmt.Sprintf("%.0f ms", a.config.Echo.DelayMS), (a.config.Echo.DelayMS-40)/460*100, 365, 775)
-	drawEffectTrack(754, "REALIMENTACIÓN", fmt.Sprintf("%.0f %%", a.config.Echo.Feedback), a.config.Echo.Feedback/70*100, 365, 775)
-	drawEffectTrack(794, "MEZCLA", fmt.Sprintf("%.0f %%", a.config.Echo.MixPercent), a.config.Echo.MixPercent/50*100, 365, 775)
+	drawEffectTrack(700, "RETARDO", fmt.Sprintf("%.0f ms", a.config.Echo.DelayMS), (a.config.Echo.DelayMS-40)/460*100, 365, 775)
+	drawEffectTrack(738, "REALIMENTACIÓN", fmt.Sprintf("%.0f %%", a.config.Echo.Feedback), a.config.Echo.Feedback/70*100, 365, 775)
+	drawEffectTrack(776, "MEZCLA", fmt.Sprintf("%.0f %%", a.config.Echo.MixPercent), a.config.Echo.MixPercent/50*100, 365, 775)
 
 	toneLabels := []string{"OSCURO", "NEUTRO", "BRILLANTE"}
 	tones := []audio.EchoTone{audio.EchoDark, audio.EchoNeutral, audio.EchoBright}
 	for i, label := range toneLabels {
-		drawButton(rl.NewRectangle(float32(95+i*165), 826, 150, 36), label, a.config.Echo.Tone == tones[i])
+		drawButton(rl.NewRectangle(float32(95+i*165), 810, 150, 30), label, a.config.Echo.Tone == tones[i])
 	}
-	rl.DrawLine(625, 826, 625, 862, color.border)
+	rl.DrawLine(625, 810, 625, 840, dspColor.border)
 	presets := [][3]float64{{80, 8, 8}, {140, 15, 12}, {260, 25, 18}}
 	for i, label := range []string{"CORTO", "MEDIO", "LARGO"} {
 		preset := presets[i]
 		selected := a.config.Echo.Enabled && math.Abs(a.config.Echo.DelayMS-preset[0]) < .5 &&
 			math.Abs(a.config.Echo.Feedback-preset[1]) < .5 && math.Abs(a.config.Echo.MixPercent-preset[2]) < .5
-		drawButton(rl.NewRectangle(float32(690+i*155), 826, 140, 36), label, selected)
+		drawButton(rl.NewRectangle(float32(690+i*155), 810, 140, 30), label, selected)
 	}
 
-	rl.DrawLine(1200, 670, 1200, 855, color.border)
-	drawText("GANANCIA", 1240, 682, 23, color.text)
-	drawText(fmt.Sprintf("%+.1f dB", a.config.OutputGainDB), 1325, 730, 34, color.amber)
+	rl.DrawLine(1200, 670, 1200, 828, dspColor.border)
+	drawText("GANANCIA", 1240, 682, 23, dspColor.text)
+	drawText(fmt.Sprintf("%+.1f dB", a.config.OutputGainDB), 1325, 730, 34, dspColor.amber)
 	percent := (a.config.OutputGainDB + 12) / 24 * 100
-	drawEffectTrack(800, "", "", percent, 1260, 250)
+	drawRecessedControlWell(rl.NewRectangle(1235, 768, 300, 42), false)
+	drawEffectTrack(780, "", "", percent, 1260, 250)
 }
 
 func drawEffectTrack(y float32, label, value string, percent float64, x, width float32) {
 	percent = max(0, min(100, percent))
 	if label != "" {
-		drawText(label, 95, int32(y-7), 18, color.text)
-		drawText(value, 260, int32(y-7), 18, color.muted)
+		drawText(label, 95, int32(y-7), 18, dspColor.text)
+		drawText(value, 260, int32(y-7), 18, dspColor.muted)
 	}
 	track := rl.NewRectangle(x, y+7, width, 10)
-	rl.DrawRectangleRounded(track, .5, 8, rl.NewColor(46, 65, 77, 255))
-	rl.DrawRectangleRounded(rl.NewRectangle(track.X, track.Y, track.Width*float32(percent/100), track.Height), .5, 8, color.amber)
-	handleX := track.X + track.Width*float32(percent/100)
-	rl.DrawCircle(int32(handleX), int32(track.Y+track.Height/2), 10, color.text)
-	rl.DrawCircle(int32(handleX), int32(track.Y+track.Height/2), 6, color.amber)
+	drawMechanicalSlider(track, percent, controlColor.active)
 }
 
 func drawValueSlider(percent float64, value, left, right string) {
 	percent = max(0, min(100, percent))
-	track := rl.NewRectangle(270, 792, 900, 16)
-	rl.DrawRectangleRounded(track, .5, 8, rl.NewColor(45, 65, 77, 255))
-	rl.DrawRectangleRounded(rl.NewRectangle(track.X, track.Y, track.Width*float32(percent/100), track.Height), .5, 8, color.amber)
-	handleX := track.X + track.Width*float32(percent/100)
-	rl.DrawCircle(int32(handleX), int32(track.Y+track.Height/2), 13, color.text)
-	rl.DrawCircle(int32(handleX), int32(track.Y+track.Height/2), 8, color.amber)
+	drawRecessedControlWell(rl.NewRectangle(205, 742, 980, 100), false)
+	track := rl.NewRectangle(270, 765, 900, 16)
+	drawMechanicalSlider(track, percent, controlColor.active)
 	for i := 0; i <= 5; i++ {
-		rl.DrawLine(int32(track.X+float32(i)*track.Width/5), int32(track.Y+24), int32(track.X+float32(i)*track.Width/5), int32(track.Y+32), color.border)
+		x := int32(track.X + float32(i)*track.Width/5)
+		rl.DrawLine(x, int32(track.Y+24), x, int32(track.Y+33), rl.NewColor(62, 70, 72, 255))
 	}
-	drawText(left, 270, 833, 16, color.muted)
-	drawText(right, 1095, 833, 16, color.muted)
-	drawText(value, 1210, 775, 38, color.text)
+	drawText(left, 270, 802, 16, dspColor.text)
+	rightSize := readableSize(16)
+	rightWidth := rl.MeasureTextEx(interfaceFont(rightSize), right, float32(rightSize), fontSpacing(rightSize)).X
+	drawText(right, int32(track.X+track.Width-rightWidth), 802, 16, dspColor.text)
+	drawText(value, 1210, 748, 38, dspColor.text)
+}
+
+func drawRecessedControlWell(r rl.Rectangle, dark bool) {
+	fill := controlColor.well
+	upper, lower := rl.NewColor(72, 80, 82, 170), rl.NewColor(245, 247, 246, 180)
+	if dark {
+		fill = rl.NewColor(22, 34, 39, 255)
+		upper, lower = rl.NewColor(3, 7, 9, 220), rl.NewColor(115, 137, 141, 120)
+	}
+	rl.DrawRectangleRounded(rl.NewRectangle(r.X+1, r.Y+3, r.Width, r.Height), .12, 8, rl.NewColor(255, 255, 255, 85))
+	rl.DrawRectangleRounded(r, .12, 8, fill)
+	rl.DrawLineEx(rl.NewVector2(r.X+12, r.Y+2), rl.NewVector2(r.X+r.Width-12, r.Y+2), 2, upper)
+	rl.DrawLineEx(rl.NewVector2(r.X+12, r.Y+r.Height-2), rl.NewVector2(r.X+r.Width-12, r.Y+r.Height-2), 2, lower)
+	rl.DrawRectangleRoundedLines(r, .12, 8, rl.NewColor(88, 96, 98, 190))
+}
+
+func drawMechanicalSlider(track rl.Rectangle, percent float64, active rl.Color) {
+	percent = max(0, min(100, percent))
+	rl.DrawRectangleRounded(rl.NewRectangle(track.X, track.Y+2, track.Width, track.Height), .5, 8, rl.NewColor(8, 13, 15, 125))
+	rl.DrawRectangleRounded(track, .5, 8, controlColor.track)
+	fill := rl.NewRectangle(track.X, track.Y, track.Width*float32(percent/100), track.Height)
+	if fill.Width > 0 {
+		rl.DrawRectangleRounded(rl.NewRectangle(fill.X-2, fill.Y-2, fill.Width+4, fill.Height+4), .5, 8, rl.NewColor(active.R, active.G, active.B, 32))
+		rl.DrawRectangleRounded(fill, .5, 8, active)
+		rl.DrawRectangleRounded(rl.NewRectangle(fill.X, fill.Y+fill.Height-3, fill.Width, 3), .5, 8, controlColor.activeEdge)
+	}
+	handleX := track.X + track.Width*float32(percent/100)
+	drawMechanicalHandle(handleX, track.Y+track.Height/2, active, max(float32(10), track.Height*.82))
+}
+
+func drawMechanicalHandle(x, y float32, active rl.Color, radius float32) {
+	rl.DrawCircle(int32(x+2), int32(y+3), radius+2, rl.NewColor(0, 0, 0, 100))
+	rl.DrawCircle(int32(x), int32(y), radius+1, rl.NewColor(8, 12, 14, 255))
+	rl.DrawRing(rl.NewVector2(x, y), radius-2, radius+1, 0, 360, 32, active)
+	rl.DrawCircle(int32(x), int32(y), radius-4, controlColor.track)
+	rl.DrawCircle(int32(x-radius*.28), int32(y-radius*.28), max(float32(1), radius*.14), rl.NewColor(255, 255, 255, 220))
 }
 
 func drawSectionToggle(enabled bool) {
@@ -1809,6 +2250,14 @@ func namedDevice(devices []audioio.Device, name string) int {
 	}
 	return 0
 }
+func defaultDeviceIndex(devices []audioio.Device) int {
+	for i, device := range devices {
+		if device.IsDefault {
+			return i
+		}
+	}
+	return 0
+}
 func namedPort(ports []ptt.Port, name string) int {
 	for i, p := range ports {
 		if p.Name == name {
@@ -1827,6 +2276,100 @@ func ellipsis(s string, limit int) string {
 func mix(a, b rl.Color, amount float32) rl.Color {
 	f := func(x, y uint8) uint8 { return uint8(float32(x) + (float32(y)-float32(x))*amount) }
 	return rl.NewColor(f(a.R, b.R), f(a.G, b.G), f(a.B, b.B), 255)
+}
+
+func spectrumFrequencyPosition(hz float64) float32 {
+	return logarithmicFrequencyPosition(hz, spectrumMinHz, spectrumMaxHz)
+}
+
+func logarithmicFrequencyPosition(hz, minimum, maximum float64) float32 {
+	hz = max(minimum, min(maximum, hz))
+	return float32(math.Log(hz/minimum) / math.Log(maximum/minimum))
+}
+
+func spectrumPositionFrequency(position float32) float64 {
+	position = max(float32(0), min(float32(1), position))
+	return spectrumMinHz * math.Pow(spectrumMaxHz/spectrumMinHz, float64(position))
+}
+
+func spectrumFrequencyX(graph rl.Rectangle, hz float64) float32 {
+	return graph.X + spectrumFrequencyPosition(hz)*graph.Width
+}
+
+func spectrumXFrequency(graph rl.Rectangle, x float32) float64 {
+	if graph.Width <= 0 {
+		return spectrumMinHz
+	}
+	return spectrumPositionFrequency((x - graph.X) / graph.Width)
+}
+
+func spectrumLevelAt(levels []float32, hz float64) float32 {
+	if len(levels) == 0 {
+		return -80
+	}
+	position := max(0.0, min(1.0, hz/spectrumMaxHz)) * float64(len(levels)-1)
+	lower := min(int(position), len(levels)-1)
+	upper := min(lower+1, len(levels)-1)
+	fraction := float32(position - float64(lower))
+	return levels[lower] + fraction*(levels[upper]-levels[lower])
+}
+
+func eqBandX(graph rl.Rectangle, band int) float32 {
+	band = max(0, min(audio.EQBandCount-1, band))
+	return graph.X + logarithmicFrequencyPosition(audio.EQFrequencies[band], 100, 10000)*graph.Width
+}
+
+func eqGraphRectangle() rl.Rectangle {
+	return rl.NewRectangle(100, 710, 1450, 90)
+}
+
+func toneButtonRectangle(activeTab int) rl.Rectangle {
+	if activeTab == 1 {
+		return rl.NewRectangle(930, 654, 180, 42)
+	}
+	return rl.NewRectangle(1170, 665, 180, 46)
+}
+
+func onTopButtonRectangle() rl.Rectangle {
+	return rl.NewRectangle(38, 62, 140, 26)
+}
+
+func txFilterToggleRectangle() rl.Rectangle {
+	return rl.NewRectangle(390, 674, 150, 38)
+}
+
+func txToneToggleRectangle() rl.Rectangle {
+	return rl.NewRectangle(820, 670, 115, 38)
+}
+
+func txFadeToggleRectangle() rl.Rectangle {
+	return rl.NewRectangle(820, 730, 115, 38)
+}
+
+func txToneSliderRectangle() rl.Rectangle {
+	return rl.NewRectangle(1150, 682, 345, 14)
+}
+
+func txFadeSliderRectangle() rl.Rectangle {
+	return rl.NewRectangle(1150, 742, 325, 14)
+}
+
+func txPresenceSliderRectangle() rl.Rectangle {
+	return rl.NewRectangle(1150, 802, 345, 14)
+}
+
+func tabRectangle(index int) rl.Rectangle {
+	return rl.NewRectangle(float32(35+index*306), 590, 296, 56)
+}
+
+func formatEQFrequency(hz float64) string {
+	if hz < 1000 {
+		return fmt.Sprintf("%.0f", hz)
+	}
+	if math.Mod(hz, 1000) == 0 {
+		return fmt.Sprintf("%.0fk", hz/1000)
+	}
+	return fmt.Sprintf("%.1fk", hz/1000)
 }
 
 func drawRackChassis() {
@@ -1868,6 +2411,22 @@ func drawInsetPanel(r rl.Rectangle, roundness float32) {
 	rl.DrawRectangleRounded(r, roundness, 8, color.panel)
 	rl.DrawRectangleRoundedLines(r, roundness, 8, rl.NewColor(42, 49, 52, 255))
 	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), roundness, 8, rl.NewColor(130, 141, 143, 90))
+}
+
+func drawMetalControlPanel(r rl.Rectangle) {
+	rl.DrawRectangleRounded(rl.NewRectangle(r.X-3, r.Y-3, r.Width+6, r.Height+7), .04, 8, rl.NewColor(61, 65, 66, 155))
+	// Scissor rectangles use physical screen coordinates and therefore do not
+	// follow the virtual 1600x900 camera when the window is resized. Drawing the
+	// panel directly keeps its bounds stable at every window scale.
+	rl.DrawRectangleRounded(r, .04, 8, rl.NewColor(205, 208, 207, 255))
+	for y := int32(r.Y) + 2; y < int32(r.Y+r.Height); y += 3 {
+		rl.DrawLine(int32(r.X+2), y, int32(r.X+r.Width-2), y, rl.NewColor(255, 255, 255, 25))
+	}
+	for y := int32(r.Y) + 4; y < int32(r.Y+r.Height); y += 8 {
+		rl.DrawLine(int32(r.X+2), y, int32(r.X+r.Width-2), y, rl.NewColor(40, 44, 45, 13))
+	}
+	rl.DrawRectangleRoundedLines(r, .04, 8, rl.NewColor(55, 60, 61, 255))
+	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), .04, 8, rl.NewColor(232, 234, 233, 150))
 }
 
 func (a *app) shortcutLabel() string {
@@ -1953,6 +2512,9 @@ func (a *app) load() {
 	a.settings.FiltersEnabled, a.settings.GainEnabled = true, true
 	a.settings.PTTMode, a.settings.PTTKey = "hold", rl.KeySpace
 	a.settings.RXEmphasisMode, a.settings.RXEmphasisMix = "ssb", 50
+	a.settings.RXFollowDefault = true
+	a.settings.TestToneHz, a.settings.TXFadeMS = 1000, 750
+	a.settings.TXFadeEnabled = true
 	data, err := os.ReadFile(settingsPath())
 	if err != nil {
 		return
@@ -1979,6 +2541,16 @@ func (a *app) load() {
 		if a.settings.Version < 8 {
 			a.config.Echo = audio.DefaultConfig().Echo
 		}
+		if a.settings.Version < 9 {
+			a.settings.RXFollowDefault = true
+		}
+		if a.settings.Version < 10 {
+			a.settings.TestToneHz, a.settings.TXFadeMS = 1000, 750
+			a.settings.TXFadeEnabled = true
+		}
+		a.settings.TestToneHz = max(0, min(5000, a.settings.TestToneHz))
+		a.settings.TXFadeMS = max(0, min(3000, a.settings.TXFadeMS))
+		a.config.LowCutHz = max(spectrumMinHz, a.config.LowCutHz)
 	}
 }
 
@@ -2008,7 +2580,7 @@ func (a *app) save() {
 			a.settings.RXOutput = a.rxView.outputs[a.rxView.outIndex].Name
 		}
 	}
-	a.settings.Version = 8
+	a.settings.Version = 10
 	path := settingsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return

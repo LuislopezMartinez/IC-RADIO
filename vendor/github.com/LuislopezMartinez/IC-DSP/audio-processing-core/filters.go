@@ -5,11 +5,11 @@ import (
 	"math/cmplx"
 )
 
-const EQBandCount = 9
+const EQBandCount = 11
 
 // EQFrequencies follows a perceptually even logarithmic distribution while
 // retaining every centre frequency used by the original five-band equalizer.
-var EQFrequencies = [EQBandCount]float64{120, 190, 300, 490, 800, 1260, 2000, 3160, 5000}
+var EQFrequencies = [EQBandCount]float64{120, 190, 300, 490, 800, 1260, 2000, 3160, 5000, 8000, 10000}
 
 type biquad struct{ b0, b1, b2, a1, a2, z1, z2 float64 }
 
@@ -20,6 +20,18 @@ func (f *biquad) peak(sampleRate, frequency, gainDB float64) {
 	a0 := 1 + alpha/a
 	f.b0, f.b1, f.b2 = (1+alpha*a)/a0, (-2*cosine)/a0, (1-alpha*a)/a0
 	f.a1, f.a2 = (-2*cosine)/a0, (1-alpha/a)/a0
+}
+
+func (f *biquad) lowpass(sampleRate, frequency float64) {
+	frequency = clamp(frequency, 20, sampleRate*.45)
+	w := 2 * math.Pi * frequency / sampleRate
+	cosine, alpha := math.Cos(w), math.Sin(w)/(2*math.Sqrt(.5))
+	a0 := 1 + alpha
+	f.b0 = ((1 - cosine) / 2) / a0
+	f.b1 = (1 - cosine) / a0
+	f.b2 = f.b0
+	f.a1 = (-2 * cosine) / a0
+	f.a2 = (1 - alpha) / a0
 }
 
 func (f *biquad) process(x float64) float64 {
@@ -101,9 +113,10 @@ func ResponseDB(c Config, sampleRate, frequency float64) float64 {
 	z := cmplx.Exp(complex(0, -2*math.Pi*frequency/sampleRate))
 	hpR := math.Exp(-2 * math.Pi * c.LowCutHz / sampleRate)
 	h := (1 - z) / (1 - complex(hpR, 0)*z)
-	lpA := 1 - math.Exp(-2*math.Pi*c.HighCutHz/sampleRate)
-	lp := complex(lpA, 0) / (1 - complex(1-lpA, 0)*z)
-	h *= lp * lp
+	var lowpass biquad
+	lowpass.lowpass(sampleRate, c.HighCutHz)
+	h *= (complex(lowpass.b0, 0) + complex(lowpass.b1, 0)*z + complex(lowpass.b2, 0)*z*z) /
+		(1 + complex(lowpass.a1, 0)*z + complex(lowpass.a2, 0)*z*z)
 	if c.EQEnabled {
 		for i, center := range EQFrequencies {
 			var f biquad
@@ -137,6 +150,12 @@ func ResponseDB(c Config, sampleRate, frequency float64) float64 {
 		lowGain := math.Pow(10, -c.SSBClarityDB/80)
 		highGain := math.Pow(10, c.SSBClarityDB/20)
 		h *= lowpass*complex(lowGain, 0) + (1-lowpass)*complex(highGain, 0)
+	}
+	if c.TXPresenceDB != 0 {
+		a := 1 - math.Exp(-2*math.Pi*1800/sampleRate)
+		lowpass := complex(a, 0) / (1 - complex(1-a, 0)*z)
+		highGain := math.Pow(10, c.TXPresenceDB/20)
+		h *= lowpass + (1-lowpass)*complex(highGain, 0)
 	}
 	return clamp(20*math.Log10(math.Max(cmplx.Abs(h), 1e-4)), -80, 24)
 }

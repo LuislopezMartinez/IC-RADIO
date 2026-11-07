@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	audio "github.com/LuislopezMartinez/IC-DSP/audio-processing-core"
+	"github.com/LuislopezMartinez/IC-DSP/audio-processing-core/audioio"
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
@@ -31,6 +32,7 @@ func TestBindingKeyName(t *testing.T) {
 func TestTXCalibrationToneProducesAudio(t *testing.T) {
 	monitor := &recordingMonitor{}
 	processor := &testToneProcessor{base: audio.NewProcessor(audio.DefaultSampleRate), monitor: monitor}
+	processor.frequencyHz.Store(1000)
 	processor.enabled.Store(true)
 	samples := make([]float32, 480)
 	processor.Process(samples)
@@ -48,6 +50,25 @@ func TestTXCalibrationToneProducesAudio(t *testing.T) {
 		if monitor.samples[i] != samples[i] {
 			t.Fatalf("MON no recibió la señal TX procesada en la muestra %d", i)
 		}
+	}
+}
+
+func TestTXFadeStartsSilentAndReachesFullLevel(t *testing.T) {
+	processor := &testToneProcessor{base: audio.NewProcessor(audio.DefaultSampleRate)}
+	processor.frequencyHz.Store(1000)
+	processor.enabled.Store(true)
+	processor.startFade(10)
+	samples := make([]float32, 960)
+	processor.Process(samples)
+	firstEnergy, finalEnergy := 0.0, 0.0
+	for _, sample := range samples[:120] {
+		firstEnergy += float64(sample * sample)
+	}
+	for _, sample := range samples[840:] {
+		finalEnergy += float64(sample * sample)
+	}
+	if firstEnergy >= finalEnergy*.25 || finalEnergy < 1e-4 {
+		t.Fatalf("fade TX inesperado: inicio=%g final=%g", firstEnergy, finalEnergy)
 	}
 }
 
@@ -91,6 +112,13 @@ func TestInitialDeviceScrollStaysInsideList(t *testing.T) {
 	}
 	if got := initialDeviceScroll(2, 6); got != 0 {
 		t.Fatalf("initialDeviceScroll(2, 6) = %d, want 0", got)
+	}
+}
+
+func TestDefaultDeviceIndex(t *testing.T) {
+	devices := []audioio.Device{{Name: "Altavoces"}, {Name: "Auriculares", IsDefault: true}}
+	if got := defaultDeviceIndex(devices); got != 1 {
+		t.Fatalf("defaultDeviceIndex() = %d, want 1", got)
 	}
 }
 
@@ -162,6 +190,91 @@ func TestMeterGradientCoversFullSignalRange(t *testing.T) {
 	}
 	if high.R <= high.G || high.R <= high.B {
 		t.Fatalf("el final del medidor no es rojo: %+v", high)
+	}
+}
+
+func TestSpectrumLogarithmicScaleRoundTrip(t *testing.T) {
+	graph := rl.NewRectangle(98, 195, 1454, 148)
+	for _, frequency := range []float64{100, 500, 1000, 2500, 4000, 10000} {
+		x := spectrumFrequencyX(graph, frequency)
+		got := spectrumXFrequency(graph, x)
+		if math.Abs(got-frequency) > frequency*.0001 {
+			t.Fatalf("conversión logarítmica de %.0f Hz devolvió %.3f Hz", frequency, got)
+		}
+	}
+	position2500 := spectrumFrequencyPosition(2500)
+	if position2500 < .69 || position2500 > .71 {
+		t.Fatalf("2500 Hz debería ocupar la zona ampliada de voz, posición=%.3f", position2500)
+	}
+	if got := spectrumXFrequency(graph, graph.X); got != spectrumMinHz {
+		t.Fatalf("el espectro empieza en %.0f Hz, want %.0f Hz", got, spectrumMinHz)
+	}
+}
+
+func TestSpectrumLevelInterpolationUsesLinearFFTSource(t *testing.T) {
+	levels := []float32{-80, -60, -40, -20, 0}
+	if got := spectrumLevelAt(levels, 2500); math.Abs(float64(got-(-60))) > .001 {
+		t.Fatalf("nivel interpolado a 2500 Hz = %.2f, want -60", got)
+	}
+}
+
+func TestSpectrumDBScaleUsesVisibleSixtyDBRange(t *testing.T) {
+	if got := spectrumDBY(200, 120, 0); got != 80 {
+		t.Fatalf("0 dB se dibuja en %.1f, want 80", got)
+	}
+	if got := spectrumDBY(200, 120, -60); got != 200 {
+		t.Fatalf("-60 dB se dibuja en %.1f, want 200", got)
+	}
+}
+
+func TestSpectrumSegmentColorsCommunicateLevel(t *testing.T) {
+	quiet := spectrumSegmentColor(-50)
+	nominal := spectrumSegmentColor(-35)
+	strong := spectrumSegmentColor(-20)
+	peak := spectrumSegmentColor(-5)
+	if quiet.B <= quiet.R || nominal.G <= nominal.B || strong.R <= strong.G || peak.R <= peak.G {
+		t.Fatalf("gradiente inesperado: quiet=%+v nominal=%+v strong=%+v peak=%+v", quiet, nominal, strong, peak)
+	}
+}
+
+func TestHighCutUsesButterworthCutoffLevel(t *testing.T) {
+	config := audio.DefaultConfig()
+	config.LowCutHz, config.HighCutHz = 20, 10000
+	config.EQEnabled = false
+	got := audio.ResponseDB(config, audio.DefaultSampleRate, 10000)
+	if got < -3.3 || got > -2.7 {
+		t.Fatalf("respuesta en el corte superior = %.2f dB, want aproximadamente -3 dB", got)
+	}
+}
+
+func TestTXPresenceRaisesHighBandBroadly(t *testing.T) {
+	config := audio.DefaultConfig()
+	config.LowCutHz, config.HighCutHz = 20, 10000
+	config.EQEnabled = false
+	without := audio.ResponseDB(config, audio.DefaultSampleRate, 5000)
+	config.TXPresenceDB = 9
+	with := audio.ResponseDB(config, audio.DefaultSampleRate, 5000)
+	if with-without < 6 {
+		t.Fatalf("presencia TX solo elevó 5 kHz en %.2f dB", with-without)
+	}
+}
+
+func TestEqualizerBandsUseFullLogarithmicRange(t *testing.T) {
+	graph := eqGraphRectangle()
+	previous := float32(-1)
+	for band, frequency := range audio.EQFrequencies {
+		x := eqBandX(graph, band)
+		want := graph.X + logarithmicFrequencyPosition(frequency, 100, 10000)*graph.Width
+		if math.Abs(float64(x-want)) > .001 {
+			t.Fatalf("banda %d (%.0f Hz) no coincide con la escala EQ: %.3f != %.3f", band, frequency, x, want)
+		}
+		if x <= previous {
+			t.Fatalf("las bandas no avanzan de forma creciente: banda %d en %.3f", band, x)
+		}
+		previous = x
+	}
+	if audio.EQBandCount != 11 || audio.EQFrequencies[9] != 8000 || audio.EQFrequencies[10] != 10000 {
+		t.Fatalf("faltan las bandas altas del ecualizador: %v", audio.EQFrequencies)
 	}
 }
 

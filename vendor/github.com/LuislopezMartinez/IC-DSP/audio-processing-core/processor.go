@@ -8,23 +8,25 @@ import (
 // Processor is safe to configure, process and inspect from different goroutines.
 // Process modifies mono float32 samples in place.
 type Processor struct {
-	mu                                                       sync.Mutex
-	sampleRate                                               float64
-	config                                                   Config
-	eq                                                       [EQBandCount]biquad
-	notch                                                    notchFilter
-	emphasis                                                 emphasisFilter
-	noise                                                    noiseReducer
-	previousInput, highpass, lowpass1, lowpass2, limiterGain float64
-	compressorEnvelope, compressorGain, compressorGainDB     float64
-	blankerPrevious, blankerPrevious2, blankerErrorEnvelope  float64
-	blankerRemaining                                         int
-	ssbClarityLowpass, ssbClarityCurrent                     float64
-	echoBuffer                                               []float64
-	echoWrite                                                int
-	echoToneLowpass, echoPresenceLowpass                     float64
-	beforeNotch, output                                      *Spectrum
-	preScratch, dryScratch                                   []float32
+	mu                                                      sync.Mutex
+	sampleRate                                              float64
+	config                                                  Config
+	eq                                                      [EQBandCount]biquad
+	lowpass                                                 biquad
+	notch                                                   notchFilter
+	emphasis                                                emphasisFilter
+	noise                                                   noiseReducer
+	previousInput, highpass, limiterGain                    float64
+	compressorEnvelope, compressorGain, compressorGainDB    float64
+	blankerPrevious, blankerPrevious2, blankerErrorEnvelope float64
+	blankerRemaining                                        int
+	ssbClarityLowpass, ssbClarityCurrent                    float64
+	txPresenceLowpass, txPresenceCurrent                    float64
+	echoBuffer                                              []float64
+	echoWrite                                               int
+	echoToneLowpass, echoPresenceLowpass                    float64
+	beforeNotch, output                                     *Spectrum
+	preScratch, dryScratch                                  []float32
 }
 
 func NewProcessor(sampleRate float64) *Processor {
@@ -49,6 +51,7 @@ func (p *Processor) Configure(c Config) {
 	c.OutputGainDB = clamp(c.OutputGainDB, -60, 12)
 	c.ProcessedMix = clamp(c.ProcessedMix, 0, 100)
 	c.SSBClarityDB = clamp(c.SSBClarityDB, -6, 9)
+	c.TXPresenceDB = clamp(c.TXPresenceDB, 0, 9)
 	if c.Compressor.TargetDBFS == 0 {
 		c.Compressor.TargetDBFS = -18
 	}
@@ -70,6 +73,7 @@ func (p *Processor) Configure(c Config) {
 	for i := range p.eq {
 		p.eq[i].peak(p.sampleRate, math.Min(EQFrequencies[i], p.sampleRate*.45), c.EQGainsDB[i])
 	}
+	p.lowpass.lowpass(p.sampleRate, c.HighCutHz)
 	p.notch.configure(p.sampleRate, c.Notch)
 }
 
@@ -77,7 +81,6 @@ func (p *Processor) Process(samples []float32) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	hpR := math.Exp(-2 * math.Pi * p.config.LowCutHz / p.sampleRate)
-	lpA := 1 - math.Exp(-2*math.Pi*p.config.HighCutHz/p.sampleRate)
 	if cap(p.preScratch) < len(samples) {
 		p.preScratch = make([]float32, len(samples))
 	}
@@ -109,10 +112,9 @@ func (p *Processor) Process(samples []float32) {
 		}
 		p.highpass = input - p.previousInput + hpR*p.highpass
 		p.previousInput = input
-		p.lowpass1 += lpA * (p.highpass - p.lowpass1)
-		p.lowpass2 += lpA * (p.lowpass1 - p.lowpass2)
-		pre[i] = float32(p.lowpass2)
-		samples[i] = float32(p.notch.process(p.lowpass2))
+		filtered := p.lowpass.process(p.highpass)
+		pre[i] = float32(filtered)
+		samples[i] = float32(p.notch.process(filtered))
 	}
 	p.beforeNotch.Add(pre)
 	if p.config.NoiseEnabled {
@@ -141,6 +143,11 @@ func (p *Processor) Process(samples []float32) {
 			v = p.ssbClarityLowpass*lowGain + (v-p.ssbClarityLowpass)*highGain
 		}
 		v = p.emphasis.process(v, p.sampleRate, p.config.Emphasis, p.config.EmphasisMicroseconds)
+		p.txPresenceCurrent += .002 * (p.config.TXPresenceDB - p.txPresenceCurrent)
+		presenceAlpha := 1 - math.Exp(-2*math.Pi*1800/p.sampleRate)
+		p.txPresenceLowpass += presenceAlpha * (v - p.txPresenceLowpass)
+		presenceGain := math.Pow(10, p.txPresenceCurrent/20)
+		v = p.txPresenceLowpass + (v-p.txPresenceLowpass)*presenceGain
 		if p.config.Compressor.Enabled {
 			power := v * v
 			detectorRate := detectorRelease
