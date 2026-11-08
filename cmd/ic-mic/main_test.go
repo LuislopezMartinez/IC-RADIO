@@ -20,6 +20,8 @@ func TestGlobalPresetsPersistInSettingsJSON(t *testing.T) {
 	txConfig := audio.DefaultConfig()
 	txConfig.Echo = audio.EchoConfig{Enabled: true, DelayMS: 235, Feedback: 31, MixPercent: 17, Tone: audio.EchoBright}
 	txConfig.VoiceShiftEnabled, txConfig.VoiceShiftSemitones = true, 2.5
+	txConfig.VoiceShiftQuality, txConfig.VoiceShiftAutoGain = audio.VoiceShiftIntense, false
+	txConfig.VoiceShiftClarity, txConfig.VoiceShiftVAD, txConfig.VoiceShiftConsonants = 75, true, true
 	rxConfig := audio.DefaultConfig()
 	rxConfig.Notch.Enabled, rxConfig.Notch.FrequencyHz = true, 2450
 	want := globalPreset{Saved: true, Name: "DX SSB", TXConfig: txConfig, TXFilters: true, TXGain: true,
@@ -76,9 +78,49 @@ func TestVoiceShiftRaisesPitchWithoutChangingDuration(t *testing.T) {
 	}
 }
 
+func TestVoiceShifterNeverDropsComplexVoiceRoute(t *testing.T) {
+	processor := audio.NewProcessor(audio.DefaultSampleRate)
+	config := audio.DefaultConfig()
+	config.LowCutHz, config.HighCutHz = 20, 10000
+	config.EQEnabled, config.Compressor.Enabled = false, false
+	config.NoiseEnabled, config.NoiseStrength, config.NoiseSpeed = true, 100, audio.NoiseFast
+	config.VoiceShiftEnabled, config.VoiceShiftSemitones = true, .5
+	config.VoiceShiftQuality, config.VoiceShiftClarity = audio.VoiceShiftBalanced, 50
+	config.VoiceShiftAutoGain, config.VoiceShiftConsonants = true, true
+	config.TXPresenceDB, config.OutputGainDB = 6, 12
+	processor.Configure(config)
+
+	samples := make([]float32, audio.DefaultSampleRate*3)
+	seed := uint32(1)
+	for i := range samples {
+		t := float64(i) / audio.DefaultSampleRate
+		fundamental := 125 + 35*math.Sin(2*math.Pi*.7*t)
+		voice := .16*math.Sin(2*math.Pi*fundamental*t) + .08*math.Sin(2*math.Pi*fundamental*2*t) + .04*math.Sin(2*math.Pi*fundamental*3*t)
+		seed = seed*1664525 + 1013904223
+		if i%12000 < 900 {
+			voice += (float64(seed>>8)/float64(1<<24) - .5) * .08
+		}
+		samples[i] = float32(voice)
+	}
+	for start := 0; start < len(samples); start += 960 {
+		end := min(start+960, len(samples))
+		processor.Process(samples[start:end])
+	}
+	energy := 0.0
+	for _, sample := range samples[audio.DefaultSampleRate:] {
+		if math.IsNaN(float64(sample)) || math.IsInf(float64(sample), 0) {
+			t.Fatal("voice shifter produced a non-finite sample")
+		}
+		energy += float64(sample * sample)
+	}
+	if energy < 1 {
+		t.Fatalf("voice shifter route lost its audio energy: %g", energy)
+	}
+}
+
 func TestBindingKeyName(t *testing.T) {
 	cases := map[int32]string{
-		rl.KeySpace: "ESPACIO",
+		rl.KeySpace: "SPACE",
 		rl.KeyA:     "A",
 		rl.KeyNine:  "9",
 		rl.KeyF12:   "F12",
@@ -87,6 +129,18 @@ func TestBindingKeyName(t *testing.T) {
 		if got := bindingKeyName(key); got != want {
 			t.Fatalf("bindingKeyName(%d) = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestFeedbackRouteDetection(t *testing.T) {
+	if got := monitorRouteRisk("Mezcla estéreo (Realtek)", "Altavoces (Realtek)"); got == "" {
+		t.Fatal("no se detectó la entrada loopback")
+	}
+	if got := monitorRouteRisk("Micrófono (USB Audio CODEC)", "Altavoces (USB Audio CODEC)"); got == "" {
+		t.Fatal("no se detectó el retorno por el mismo codec de radio")
+	}
+	if got := monitorRouteRisk("Micrófono (USB MICROPHONE)", "Headphones (Realtek Audio)"); got != "" {
+		t.Fatalf("ruta normal marcada como peligrosa: %s", got)
 	}
 }
 
@@ -111,6 +165,23 @@ func TestTXCalibrationToneProducesAudio(t *testing.T) {
 		if monitor.samples[i] != samples[i] {
 			t.Fatalf("MON no recibió la señal TX procesada en la muestra %d", i)
 		}
+	}
+}
+
+func TestSafetyProtectionReducesButNeverMutesTX(t *testing.T) {
+	processor := &testToneProcessor{base: audio.NewProcessor(audio.DefaultSampleRate), safetyGain: 1}
+	processor.safetyActive.Store(true)
+	samples := make([]float32, 480)
+	for i := range samples {
+		samples[i] = float32(.8 * math.Sin(2*math.Pi*1000*float64(i)/audio.DefaultSampleRate))
+	}
+	processor.Process(samples)
+	energy := 0.0
+	for _, sample := range samples {
+		energy += float64(sample * sample)
+	}
+	if energy == 0 {
+		t.Fatal("TX safety protection muted the complete audio block")
 	}
 }
 
@@ -185,10 +256,10 @@ func TestDefaultDeviceIndex(t *testing.T) {
 
 func TestRadioStateLabels(t *testing.T) {
 	cases := map[string]string{
-		stateRX:           "RX ESCUCHANDO",
-		stateTXReady:      "TX PREPARADO",
-		stateTransmitting: "TRANSMITIENDO",
-		stateError:        "ERROR DE RUTA",
+		stateRX:           "RX LISTENING",
+		stateTXReady:      "TX READY",
+		stateTransmitting: "TRANSMITTING",
+		stateError:        "ROUTING ERROR",
 	}
 	for state, want := range cases {
 		a := app{radioState: state}

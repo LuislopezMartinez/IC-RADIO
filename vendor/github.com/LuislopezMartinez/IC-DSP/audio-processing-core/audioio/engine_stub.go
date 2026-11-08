@@ -12,12 +12,12 @@ type Engine struct {
 
 func New(Processor) (*Engine, error) {
 	e := &Engine{}
-	e.status = Status{SampleRate: 48000, BufferFrames: 480, InputDBFS: -80, OutputDBFS: -80, InputRMSDBFS: -80, OutputRMSDBFS: -80, Error: "Audio no disponible: compile con CGO_ENABLED=1 y un compilador C"}
+	e.status = Status{SampleRate: 48000, BufferFrames: 480, InputDBFS: -80, OutputDBFS: -80, InputRMSDBFS: -80, OutputRMSDBFS: -80, Error: "Audio unavailable: build with CGO_ENABLED=1 and a C compiler"}
 	return e, nil
 }
 func (e *Engine) Close()               {}
-func (e *Engine) Inputs() []Device     { return []Device{{Name: "Audio no disponible", IsDefault: true}} }
-func (e *Engine) Outputs() []Device    { return []Device{{Name: "Audio no disponible", IsDefault: true}} }
+func (e *Engine) Inputs() []Device     { return []Device{{Name: "Audio unavailable", IsDefault: true}} }
+func (e *Engine) Outputs() []Device    { return []Device{{Name: "Audio unavailable", IsDefault: true}} }
 func (e *Engine) Refresh() error       { return nil }
 func (e *Engine) Start(int, int) error { return nil }
 func (e *Engine) Stop()                {}

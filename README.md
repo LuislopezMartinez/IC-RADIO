@@ -1,74 +1,73 @@
 # IC-RADIO
 
-Consola de audio RX/TX para transceptores con interfaz USB, procesamiento DSP
-en tiempo real y control PTT mediante RTS o DTR. Permite utilizar un micrófono
-USB externo, procesar la voz y enviarla a la entrada de audio USB de la radio.
+RX/TX audio console for USB-equipped transceivers, featuring real-time DSP and
+PTT control through RTS or DTR. IC-RADIO lets you use an external USB
+microphone, process your voice, and route it to the radio USB audio input.
 
-![Interfaz de IC-RADIO](assets/screenshots/ic-radio-interface.png)
+![IC-RADIO interface](assets/screenshots/ic-radio-interface.png)
 
-## Funciones
+## Features
 
-- Rutas independientes de recepción y transmisión.
-- Selección desplegable de dispositivos de grabación y reproducción.
-- Ecualizador gráfico de 11 bandas, hasta 10 kHz, con restablecimiento y bypass.
-- Filtros de corte inferior y superior ajustables sobre el espectro.
-- Énfasis de voz SSB y deénfasis FM de 50/75 µs.
-- Notch RX gráfico con frecuencia, anchura y profundidad ajustables.
-- Compresor TX en pasos predefinidos.
-- Eco TX con retardo, realimentación, mezcla, tono y perfiles rápidos.
-- Modificador de voz TX de -4 a +4 semitonos sin alterar la duración.
-- Reducción de ruido regulable con integración lenta, media o rápida.
-- Ganancia independiente para RX y TX.
-- Monitor `MON` para escuchar la señal TX procesada por los auriculares RX.
-- Espectro y medidores de entrada y salida.
-- PTT por RTS o DTR con modos mantener y bloqueo.
-- Atajo PTT configurable y retorno de emergencia a RX mediante Escape.
-- Persistencia independiente de todos los parámetros RX y TX.
-- Tres presets globales con nombre editable para guardar y recuperar conjuntamente los parámetros DSP de RX y TX.
+- Independent RX and TX audio routes with drop-down device selectors.
+- Logarithmic spectrum, input/output meters, and draggable filter markers.
+- Eleven-band graphic equalizer up to 10 kHz, with reset and bypass.
+- Adjustable high-pass and low-pass voice filters.
+- RX notch filter with draggable frequency, width, and depth controls.
+- SSB voice emphasis and 50/75 µs FM de-emphasis.
+- TX compressor, configurable noise reduction, output gain, and presence.
+- TX echo with delay, feedback, mix, tone profiles, and quick presets.
+- Formant-preserving voice shifter from -4 to +4 semitones.
+- Natural, Balanced, and Intense voice-shifter modes, automatic level,
+  consonant protection, voice activity bypass, clarity, and A/B monitoring.
+- `MON` output for listening to processed TX audio through the RX headphones.
+- Monitor clock-drift compensation and risky-route feedback detection.
+- Progressive TX saturation protection with manual safety reset.
+- Automatic 100% volume and unmute preparation for the radio USB endpoint.
+- PTT over RTS or DTR with Hold and Lock modes, configurable shortcut, and
+  emergency return to RX with Escape.
+- Persistent independent RX/TX settings and three named global presets.
+- Self-contained source tree: the DSP core and all Go dependencies are
+  included locally under `vendor`.
 
-## Compatibilidad
+## Compatibility
 
-IC-RADIO puede utilizarse con transceptores que expongan en el ordenador:
+IC-RADIO works with transceivers that expose:
 
-1. Una entrada de grabación USB para recibir el audio de la radio.
-2. Una salida de reproducción USB para enviar audio hacia la radio.
-3. Un puerto serie capaz de controlar PTT mediante RTS o DTR.
+1. A USB recording endpoint carrying audio from the radio.
+2. A USB playback endpoint accepting modulation audio.
+3. A serial port capable of PTT control through RTS or DTR.
 
-La denominación de dispositivos y los menús cambian según el fabricante. En
-la radio debe seleccionarse el audio USB como fuente de modulación y asignarse
-PTT/SEND a la misma línea RTS o DTR elegida en IC-RADIO. Icom IC-7300 es uno de
-los equipos compatibles, pero no es un requisito del programa.
+Device names and radio menus vary by manufacturer. Select USB audio as the
+radio modulation source and assign PTT/SEND to the same RTS or DTR line chosen
+in IC-RADIO. The Icom IC-7300 is supported but is not required.
 
-## Instalación en Windows
+## Windows installation
 
-Descarga `IC-RADIO-Windows-x64.zip` desde la sección **Releases**, extrae su
-contenido y ejecuta `ic-radio.exe`. Windows puede mostrar una advertencia al
-tratarse de un ejecutable sin firma digital.
+Download `IC-RADIO-Windows-x64-v0.6.0.zip` from **Releases**, extract it, and
+run `ic-radio.exe`. Windows may display a warning because the executable is not
+digitally signed.
 
-Las preferencias se guardan en `%AppData%\IC-MIC\settings.json`.
+Settings are stored in `%AppData%\IC-MIC\settings.json`.
 
-> Para utilizar `MON` se recomiendan auriculares; los altavoces pueden producir
-> realimentación acústica con el micrófono.
+> Headphones are recommended when using `MON`; loudspeakers can create acoustic
+> feedback through the microphone.
 
-## Compilación sin dependencias externas
+## Building locally
 
-Requisitos: Go 1.22 o posterior, CGO y un compilador C compatible con Windows.
-El repositorio incluye localmente el núcleo DSP y todas las dependencias Go en
-el directorio `vendor`; no necesita el proyecto IC-DSP ni descargar módulos.
+Requirements: Go 1.22 or later, CGO, and a Windows-compatible C compiler. No
+external IC-DSP checkout or Go module download is required.
 
 ```powershell
-go test -mod=vendor -tags noaudio ./...
-go build -mod=vendor -tags noaudio -trimpath -ldflags '-H=windowsgui' -o ic-radio.exe ./cmd/ic-mic
+.\build-radio-windows.ps1
 ```
 
-## Seguridad PTT
+## PTT safety
 
-IC-RADIO desactiva RTS y DTR al abrir y cerrar el puerto. Escape fuerza el
-retorno inmediato a RX y el modo mantener vuelve automáticamente a recepción
-si la aplicación pierde el foco.
+IC-RADIO clears RTS and DTR when opening and closing the serial port. Escape
+forces an immediate return to RX, and Hold mode returns to RX automatically if
+the application loses focus.
 
-## Créditos
+## Credits
 
-El procesamiento de audio procede del núcleo de IC-DSP, incorporado en este
-repositorio. La interfaz incluye Inter y Black Ops One bajo SIL Open Font
-License 1.1.
+Created by EA3IWW. The embedded DSP core originates from IC-DSP. The interface
+includes Inter and Black Ops One under the SIL Open Font License 1.1.

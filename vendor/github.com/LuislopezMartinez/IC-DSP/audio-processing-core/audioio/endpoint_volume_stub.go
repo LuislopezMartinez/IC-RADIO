@@ -11,4 +11,6 @@ func InspectPlaybackEndpoint(string) (PlaybackVolumeStatus, error) {
 	return PlaybackVolumeStatus{Percent: 100}, nil
 }
 
+func PreparePlaybackEndpoint(string) error { return nil }
+
 func DefaultPlaybackEndpointName() (string, error) { return "", nil }

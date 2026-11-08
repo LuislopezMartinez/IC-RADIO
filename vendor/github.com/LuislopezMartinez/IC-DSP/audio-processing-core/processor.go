@@ -54,6 +54,10 @@ func (p *Processor) Configure(c Config) {
 	c.SSBClarityDB = clamp(c.SSBClarityDB, -6, 9)
 	c.TXPresenceDB = clamp(c.TXPresenceDB, 0, 9)
 	c.VoiceShiftSemitones = clamp(c.VoiceShiftSemitones, -4, 4)
+	c.VoiceShiftClarity = clamp(c.VoiceShiftClarity, 0, 100)
+	if c.VoiceShiftQuality != VoiceShiftNatural && c.VoiceShiftQuality != VoiceShiftIntense {
+		c.VoiceShiftQuality = VoiceShiftBalanced
+	}
 	if c.Compressor.TargetDBFS == 0 {
 		c.Compressor.TargetDBFS = -18
 	}
@@ -126,7 +130,8 @@ func (p *Processor) Process(samples []float32) {
 		p.noise.process(samples, true, p.config.NoiseStrength, p.config.NoiseSpeed)
 	}
 	if p.config.VoiceShiftEnabled && math.Abs(p.config.VoiceShiftSemitones) >= .05 {
-		p.pitch.process(samples, p.config.VoiceShiftSemitones, p.sampleRate)
+		p.pitch.process(samples, p.config.VoiceShiftSemitones, p.sampleRate, p.config.VoiceShiftQuality,
+			p.config.VoiceShiftAutoGain, p.config.VoiceShiftClarity, p.config.VoiceShiftVAD, p.config.VoiceShiftConsonants)
 	}
 	outputGain := math.Pow(10, p.config.OutputGainDB/20)
 	mix := p.config.ProcessedMix / 100

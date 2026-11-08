@@ -50,6 +50,14 @@ const (
 	EchoBright  EchoTone = "bright"
 )
 
+type VoiceShiftQuality uint8
+
+const (
+	VoiceShiftNatural VoiceShiftQuality = iota
+	VoiceShiftBalanced
+	VoiceShiftIntense
+)
+
 type EchoConfig struct {
 	Enabled    bool
 	DelayMS    float64
@@ -73,6 +81,11 @@ type Config struct {
 	TXPresenceDB         float64
 	VoiceShiftEnabled    bool
 	VoiceShiftSemitones  float64
+	VoiceShiftQuality    VoiceShiftQuality
+	VoiceShiftAutoGain   bool
+	VoiceShiftClarity    float64
+	VoiceShiftVAD        bool
+	VoiceShiftConsonants bool
 	OutputGainDB         float64
 	ProcessedMix         float64
 	Compressor           CompressorConfig
@@ -86,6 +99,11 @@ func DefaultConfig() Config {
 		NoiseStrength: 50, NoiseSpeed: NoiseNormal,
 		EmphasisMicroseconds: 50,
 		SSBClarityDB:         0,
+		VoiceShiftQuality:    VoiceShiftBalanced,
+		VoiceShiftAutoGain:   true,
+		VoiceShiftClarity:    50,
+		VoiceShiftVAD:        true,
+		VoiceShiftConsonants: true,
 		OutputGainDB:         0,
 		ProcessedMix:         100,
 		Compressor: CompressorConfig{

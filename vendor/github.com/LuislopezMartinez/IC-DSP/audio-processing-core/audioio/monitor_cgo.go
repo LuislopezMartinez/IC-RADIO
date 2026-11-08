@@ -15,15 +15,16 @@ import (
 // second Windows playback endpoint. Its short ring buffer decouples the two
 // audio-device clocks without changing the primary radio path.
 type PlaybackMonitor struct {
-	mu      sync.Mutex
-	context *malgo.AllocatedContext
-	device  *malgo.Device
-	outputs []malgo.DeviceInfo
-	buffer  []float32
-	read    int
-	write   int
-	count   int
-	running bool
+	mu        sync.Mutex
+	context   *malgo.AllocatedContext
+	device    *malgo.Device
+	outputs   []malgo.DeviceInfo
+	buffer    []float32
+	read      int
+	write     int
+	count     int
+	readPhase float64
+	running   bool
 }
 
 func NewPlaybackMonitor() (*PlaybackMonitor, error) {
@@ -35,7 +36,7 @@ func NewPlaybackMonitor() (*PlaybackMonitor, error) {
 	if err != nil {
 		_ = ctx.Uninit()
 		ctx.Free()
-		return nil, fmt.Errorf("enumerar salida de monitor: %w", err)
+		return nil, fmt.Errorf("enumerate monitor outputs: %w", err)
 	}
 	return &PlaybackMonitor{context: ctx, outputs: outputs, buffer: make([]float32, sampleRate/10)}, nil
 }
@@ -43,7 +44,7 @@ func NewPlaybackMonitor() (*PlaybackMonitor, error) {
 func (m *PlaybackMonitor) Start(outputIndex int) error {
 	m.Stop()
 	if outputIndex < 0 || outputIndex >= len(m.outputs) {
-		return fmt.Errorf("salida de monitor no válida")
+		return fmt.Errorf("invalid monitor output")
 	}
 	config := malgo.DefaultDeviceConfig(malgo.Playback)
 	config.SampleRate = sampleRate
@@ -73,11 +74,11 @@ func (m *PlaybackMonitor) StartNamed(name string) error {
 	// could never be found here.
 	m.Stop()
 	if m.context == nil {
-		return fmt.Errorf("motor de monitor cerrado")
+		return fmt.Errorf("monitor engine is closed")
 	}
 	outputs, err := m.context.Devices(malgo.Playback)
 	if err != nil {
-		return fmt.Errorf("actualizar salidas de monitor: %w", err)
+		return fmt.Errorf("refresh monitor outputs: %w", err)
 	}
 	m.outputs = outputs
 	for i := range m.outputs {
@@ -85,7 +86,7 @@ func (m *PlaybackMonitor) StartNamed(name string) error {
 			return m.Start(i)
 		}
 	}
-	return fmt.Errorf("salida de monitor no encontrada: %s", name)
+	return fmt.Errorf("monitor output not found: %s", name)
 }
 
 // Write copies processed samples without retaining the caller's audio buffer.
@@ -112,12 +113,27 @@ func (m *PlaybackMonitor) Write(samples []float32) {
 func (m *PlaybackMonitor) process(output, _ []byte, frameCount uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	target := float64(len(m.buffer)) * .5
+	step := 1.0
+	if target > 0 {
+		step += math.Max(-.003, math.Min(.003, (float64(m.count)-target)/target*.003))
+	}
 	for i := 0; i < int(frameCount); i++ {
 		var sample float32
-		if m.count > 0 {
-			sample = m.buffer[m.read]
-			m.read = (m.read + 1) % len(m.buffer)
-			m.count--
+		position := int(m.readPhase)
+		if m.count > position+1 {
+			left := m.buffer[(m.read+position)%len(m.buffer)]
+			right := m.buffer[(m.read+position+1)%len(m.buffer)]
+			fraction := float32(m.readPhase - float64(position))
+			sample = left + (right-left)*fraction
+			m.readPhase += step
+			consumed := int(m.readPhase)
+			if consumed > 0 {
+				consumed = min(consumed, m.count)
+				m.read = (m.read + consumed) % len(m.buffer)
+				m.count -= consumed
+				m.readPhase -= float64(consumed)
+			}
 		}
 		bits := math.Float32bits(sample)
 		binary.LittleEndian.PutUint32(output[(i*2)*4:], bits)
@@ -138,7 +154,7 @@ func (m *PlaybackMonitor) Stop() {
 		m.device = nil
 	}
 	m.mu.Lock()
-	m.read, m.write, m.count = 0, 0, 0
+	m.read, m.write, m.count, m.readPhase = 0, 0, 0, 0
 	m.mu.Unlock()
 }
 

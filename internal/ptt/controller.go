@@ -50,7 +50,7 @@ func (c *Controller) Connect(portName string, line Line) error {
 	defer c.mu.Unlock()
 	c.closeLocked()
 	if portName == "" {
-		return fmt.Errorf("selecciona un puerto COM")
+		return fmt.Errorf("select a COM port")
 	}
 	port, err := serial.Open(portName, &serial.Mode{
 		BaudRate: 115200,
@@ -62,15 +62,15 @@ func (c *Controller) Connect(portName string, line Line) error {
 		InitialStatusBits: &serial.ModemOutputBits{DTR: false, RTS: false},
 	})
 	if err != nil {
-		return fmt.Errorf("abrir %s: %w", portName, err)
+		return fmt.Errorf("open %s: %w", portName, err)
 	}
 	if err := port.SetRTS(false); err != nil {
 		_ = port.Close()
-		return fmt.Errorf("desactivar RTS: %w", err)
+		return fmt.Errorf("disable RTS: %w", err)
 	}
 	if err := port.SetDTR(false); err != nil {
 		_ = port.Close()
-		return fmt.Errorf("desactivar DTR: %w", err)
+		return fmt.Errorf("disable DTR: %w", err)
 	}
 	c.port, c.portName, c.line = port, portName, line
 	return nil
@@ -80,7 +80,7 @@ func (c *Controller) SetTX(enabled bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.port == nil {
-		return fmt.Errorf("PTT no conectado")
+		return fmt.Errorf("PTT not connected")
 	}
 	var err error
 	if c.line == DTR {

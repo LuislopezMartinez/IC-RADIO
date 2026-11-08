@@ -1,32 +1,38 @@
-# IC-RADIO v0.5.0
+# IC-RADIO v0.6.0
 
-Nueva versión para Windows x64 centrada en la personalización completa del
-audio y la recuperación rápida de configuraciones RX/TX.
+This release focuses on voice processing, reliable TX routing, monitoring
+safety, and an international English interface.
 
-## Novedades
+## Highlights
 
-- Nuevo modificador de voz TX ajustable entre -4 y +4 semitonos en pasos de
-  medio semitono, sin cambiar la duración de la locución.
-- Procesamiento granular continuo con compensación tonal para mantener el
-  cuerpo de la voz en desplazamientos moderados.
-- Panel de filtros TX dividido en dos módulos: paso de banda y modificador de
-  voz.
-- Tres presets globales capaces de guardar conjuntamente todos los parámetros
-  DSP de RX y TX.
-- Nombre editable para cada preset y confirmación antes de sobrescribir una
-  ranura.
-- Botones `LOAD` y `SAVE` para recuperar o actualizar rápidamente cada perfil.
-- Los presets, sus nombres y el modificador de voz permanecen guardados al
-  cerrar el programa.
+- Advanced formant-preserving TX voice shifter with Natural, Balanced, and
+  Intense modes.
+- Adjustable pitch and clarity, automatic level compensation, voice activity
+  bypass, consonant protection, and momentary A/B comparison.
+- Stabilized LPC synthesis with automatic recovery, preventing the voice
+  shifter from muting the radio and monitor routes.
+- Progressive saturation protection that reduces excessive TX level without
+  ever replacing the audio stream with silence.
+- Manual `RESET SAFE` control and an effective 18 dB combined gain/presence
+  ceiling.
+- Automatic unmute and 100% volume preparation for dedicated `USB Audio CODEC`
+  radio outputs.
+- `MON` clock-drift compensation for cleaner long monitoring sessions.
+- Detection and blocking of risky loopback routes that could cause feedback.
+- Compact redesigned TX filter and voice-shifter controls.
+- Automatic button text fitting and fully English user interface.
+- `By EA3IWW` branding in the application header and window title.
+- Updated screenshot and expanded regression tests for complex voice signals,
+  routing, safety protection, persistence, and DSP behavior.
 
-## Descarga
+## Download
 
-Descarga `IC-RADIO-Windows-x64-v0.5.0.zip`, extrae el archivo y ejecuta
-`ic-radio.exe`. El binario no está firmado digitalmente, por lo que Windows
-puede solicitar confirmación la primera vez.
+Download `IC-RADIO-Windows-x64-v0.6.0.zip`, extract it, and run
+`ic-radio.exe`. The executable is unsigned, so Windows may request confirmation
+the first time it is launched.
 
-## Importante
+## Important
 
-La radio debe admitir audio USB y control PTT mediante RTS o DTR. Es necesario
-seleccionar en el transceptor la entrada USB como fuente de modulación. Para
-usar `MON`, se recomiendan auriculares con el fin de evitar realimentación.
+The radio must support USB audio and RTS or DTR PTT control. Select the USB
+audio input as the radio modulation source. Headphones are recommended when
+using `MON` to avoid acoustic feedback.

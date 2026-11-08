@@ -42,11 +42,11 @@ func (e *Engine) refresh() error {
 	var err error
 	e.inputs, err = e.context.Devices(malgo.Capture)
 	if err != nil {
-		return fmt.Errorf("enumerar entradas: %w", err)
+		return fmt.Errorf("enumerate inputs: %w", err)
 	}
 	e.outputs, err = e.context.Devices(malgo.Playback)
 	if err != nil {
-		return fmt.Errorf("enumerar salidas: %w", err)
+		return fmt.Errorf("enumerate outputs: %w", err)
 	}
 	return nil
 }
@@ -68,7 +68,7 @@ func (e *Engine) Refresh() error {
 func (e *Engine) Start(inputIndex, outputIndex int) error {
 	e.Stop()
 	if inputIndex < 0 || inputIndex >= len(e.inputs) || outputIndex < 0 || outputIndex >= len(e.outputs) {
-		return fmt.Errorf("dispositivo de audio no válido")
+		return fmt.Errorf("invalid audio device")
 	}
 	config := malgo.DefaultDeviceConfig(malgo.Duplex)
 	config.SampleRate = sampleRate

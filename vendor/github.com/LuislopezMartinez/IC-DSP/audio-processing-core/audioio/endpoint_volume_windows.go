@@ -116,6 +116,46 @@ static HRESULT inspect_playback_endpoint(const char *wanted, float *currentVolum
     if (uninitialize) CoUninitialize();
     return hr;
 }
+
+static HRESULT prepare_playback_endpoint(const char *wanted) {
+    HRESULT init = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    int uninitialize = SUCCEEDED(init);
+    if (FAILED(init) && init != RPC_E_CHANGED_MODE) return init;
+    IMMDeviceEnumerator *enumerator = NULL;
+    IMMDeviceCollection *collection = NULL;
+    IMMDevice *matched = NULL;
+    HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
+                                  &IID_IMMDeviceEnumerator, (void**)&enumerator);
+    if (SUCCEEDED(hr)) hr = IMMDeviceEnumerator_EnumAudioEndpoints(enumerator, eRender, DEVICE_STATE_ACTIVE, &collection);
+    if (SUCCEEDED(hr)) {
+        UINT count = 0;
+        IMMDeviceCollection_GetCount(collection, &count);
+        hr = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        for (UINT i = 0; i < count; i++) {
+            IMMDevice *device = NULL;
+            if (SUCCEEDED(IMMDeviceCollection_Item(collection, i, &device))) {
+                if (friendly_name_matches(device, wanted)) {
+                    matched = device;
+                    hr = S_OK;
+                    break;
+                }
+                IMMDevice_Release(device);
+            }
+        }
+    }
+    if (SUCCEEDED(hr) && matched != NULL) {
+        IAudioEndpointVolume *volume = NULL;
+        hr = IMMDevice_Activate(matched, &IID_IAudioEndpointVolume, CLSCTX_ALL, NULL, (void**)&volume);
+        if (SUCCEEDED(hr)) hr = IAudioEndpointVolume_SetMute(volume, FALSE, NULL);
+        if (SUCCEEDED(hr)) hr = IAudioEndpointVolume_SetMasterVolumeLevelScalar(volume, 1.0f, NULL);
+        if (volume != NULL) IAudioEndpointVolume_Release(volume);
+    }
+    if (matched != NULL) IMMDevice_Release(matched);
+    if (collection != NULL) IMMDeviceCollection_Release(collection);
+    if (enumerator != NULL) IMMDeviceEnumerator_Release(enumerator);
+    if (uninitialize) CoUninitialize();
+    return hr;
+}
 */
 import "C"
 
@@ -144,16 +184,27 @@ func InspectPlaybackEndpoint(name string) (PlaybackVolumeStatus, error) {
 	return status, nil
 }
 
+// PreparePlaybackEndpoint ensures the dedicated radio playback endpoint cannot
+// silently attenuate the stream before it reaches the transceiver.
+func PreparePlaybackEndpoint(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	if hr := C.prepare_playback_endpoint(cName); hr < 0 {
+		return fmt.Errorf("prepare Windows playback endpoint %q: HRESULT 0x%08X", name, uint32(hr))
+	}
+	return nil
+}
+
 func DefaultPlaybackEndpointName() (string, error) {
 	const capacity = 1024
 	buffer := C.malloc(capacity)
 	if buffer == nil {
-		return "", fmt.Errorf("reservar memoria para el dispositivo predeterminado")
+		return "", fmt.Errorf("allocate memory for the default device")
 	}
 	defer C.free(buffer)
 	hr := C.default_playback_endpoint_name((*C.char)(buffer), capacity)
 	if hr < 0 {
-		return "", fmt.Errorf("consultar salida predeterminada de Windows: HRESULT 0x%08X", uint32(hr))
+		return "", fmt.Errorf("query Windows default output: HRESULT 0x%08X", uint32(hr))
 	}
 	return C.GoString((*C.char)(buffer)), nil
 }
