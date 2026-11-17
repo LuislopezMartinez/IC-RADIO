@@ -15,6 +15,7 @@ import (
 	"github.com/LuislopezMartinez/IC-DSP/audio-processing-core/audioio"
 	appfonts "github.com/LuislopezMartinez/IC-RADIO/assets/fonts"
 	"github.com/LuislopezMartinez/IC-RADIO/internal/ptt"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/wdsp"
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
@@ -53,6 +54,31 @@ var controlColor = struct {
 	rl.NewColor(255, 193, 40, 255), rl.NewColor(180, 91, 0, 255), rl.NewColor(31, 205, 220, 255),
 }
 
+// editorColor gives both DSP editors a quiet visual identity without changing
+// the neutral rack finish: RX is green/cyan, TX is warm amber/orange.
+var editorColor = struct {
+	accent, edge, fill, outline rl.Color
+}{
+	accent:  rl.NewColor(255, 193, 40, 255),
+	edge:    rl.NewColor(180, 91, 0, 255),
+	fill:    rl.NewColor(73, 51, 17, 255),
+	outline: rl.NewColor(255, 193, 40, 95),
+}
+
+func selectEditorColors(mode string) {
+	if mode == "rx" {
+		editorColor.accent = rl.NewColor(54, 224, 142, 255)
+		editorColor.edge = rl.NewColor(12, 132, 103, 255)
+		editorColor.fill = rl.NewColor(18, 68, 55, 255)
+		editorColor.outline = rl.NewColor(54, 224, 142, 95)
+		return
+	}
+	editorColor.accent = rl.NewColor(255, 164, 46, 255)
+	editorColor.edge = rl.NewColor(184, 72, 18, 255)
+	editorColor.fill = rl.NewColor(78, 43, 18, 255)
+	editorColor.outline = rl.NewColor(255, 132, 42, 95)
+}
+
 var regularFont, semiboldFont, militaryFont rl.Font
 
 type testToneProcessor struct {
@@ -69,6 +95,7 @@ type testToneProcessor struct {
 	safetyGain       float64
 	safetyActive     atomic.Bool
 	safetyReset      atomic.Bool
+	sequencer        *signalSequencer
 }
 
 type sampleMonitor interface {
@@ -76,7 +103,8 @@ type sampleMonitor interface {
 }
 
 func (p *testToneProcessor) Process(samples []float32) {
-	if p.enabled.Load() {
+	signaling := p.sequencer != nil && p.sequencer.Render(samples)
+	if !signaling && p.enabled.Load() {
 		frequency := max(int64(0), min(int64(5000), p.frequencyHz.Load()))
 		phaseStep := 2 * math.Pi * float64(frequency) / audio.DefaultSampleRate
 		for i := range samples {
@@ -91,7 +119,15 @@ func (p *testToneProcessor) Process(samples []float32) {
 			}
 		}
 	}
-	p.base.Process(samples)
+	if signaling {
+		// Keep the voice DSP advancing towards silence, but do not pass its old
+		// filter/echo state into a freshly started signaling tone. That state
+		// transition otherwise produces an audible click when PTT opens.
+		decay := make([]float32, len(samples))
+		p.base.Process(decay)
+	} else {
+		p.base.Process(samples)
+	}
 	energy := 0.0
 	for _, sample := range samples {
 		energy += float64(sample * sample)
@@ -146,7 +182,16 @@ func (p *testToneProcessor) Process(samples []float32) {
 	}
 	p.fadeMu.Unlock()
 	if p.monitor != nil {
-		p.monitor.Write(samples)
+		if signaling {
+			preview := make([]float32, len(samples))
+			gain := float32(p.sequencer.CueVolume())
+			for i := range samples {
+				preview[i] = samples[i] * gain
+			}
+			p.monitor.Write(preview)
+		} else {
+			p.monitor.Write(samples)
+		}
 	}
 }
 
@@ -168,36 +213,38 @@ func (p *testToneProcessor) resetSafety() {
 }
 
 type settings struct {
-	Version         int             `json:"version"`
-	Input           string          `json:"input"`
-	Output          string          `json:"output"`
-	COM             string          `json:"com"`
-	PTTLine         ptt.Line        `json:"ptt_line"`
-	Config          audio.Config    `json:"dsp"`
-	FiltersEnabled  bool            `json:"filters_enabled"`
-	GainEnabled     bool            `json:"gain_enabled"`
-	PTTMode         string          `json:"ptt_mode"`
-	PTTKey          int32           `json:"ptt_key"`
-	PTTCtrl         bool            `json:"ptt_ctrl"`
-	PTTAlt          bool            `json:"ptt_alt"`
-	PTTShift        bool            `json:"ptt_shift"`
-	RXInput         string          `json:"rx_input"`
-	RXOutput        string          `json:"rx_output"`
-	RXFollowDefault bool            `json:"rx_follow_default_output"`
-	RXConfig        audio.Config    `json:"rx_dsp"`
-	RXFilters       bool            `json:"rx_filters_enabled"`
-	RXGain          bool            `json:"rx_gain_enabled"`
-	RXEmphasis      bool            `json:"rx_emphasis_enabled"`
-	RXEmphasisMode  string          `json:"rx_emphasis_mode"`
-	RXEmphasisMix   float64         `json:"rx_emphasis_amount"`
-	TXActiveTab     int             `json:"tx_active_tab"`
-	RXActiveTab     int             `json:"rx_active_tab"`
-	MonitorEnabled  bool            `json:"tx_monitor_enabled"`
-	AlwaysOnTop     bool            `json:"always_on_top"`
-	TestToneHz      float64         `json:"test_tone_hz"`
-	TXFadeEnabled   bool            `json:"tx_fade_enabled"`
-	TXFadeMS        float64         `json:"tx_fade_ms"`
-	GlobalPresets   [3]globalPreset `json:"global_presets"`
+	Version         int               `json:"version"`
+	Input           string            `json:"input"`
+	Output          string            `json:"output"`
+	COM             string            `json:"com"`
+	PTTLine         ptt.Line          `json:"ptt_line"`
+	Config          audio.Config      `json:"dsp"`
+	FiltersEnabled  bool              `json:"filters_enabled"`
+	GainEnabled     bool              `json:"gain_enabled"`
+	PTTMode         string            `json:"ptt_mode"`
+	PTTKey          int32             `json:"ptt_key"`
+	PTTCtrl         bool              `json:"ptt_ctrl"`
+	PTTAlt          bool              `json:"ptt_alt"`
+	PTTShift        bool              `json:"ptt_shift"`
+	RXInput         string            `json:"rx_input"`
+	RXOutput        string            `json:"rx_output"`
+	RXFollowDefault bool              `json:"rx_follow_default_output"`
+	RXConfig        audio.Config      `json:"rx_dsp"`
+	RXFilters       bool              `json:"rx_filters_enabled"`
+	RXGain          bool              `json:"rx_gain_enabled"`
+	RXEmphasis      bool              `json:"rx_emphasis_enabled"`
+	RXEmphasisMode  string            `json:"rx_emphasis_mode"`
+	RXEmphasisMix   float64           `json:"rx_emphasis_amount"`
+	RXWDSP          wdsp.Config       `json:"rx_wdsp"`
+	TXActiveTab     int               `json:"tx_active_tab"`
+	RXActiveTab     int               `json:"rx_active_tab"`
+	MonitorEnabled  bool              `json:"tx_monitor_enabled"`
+	AlwaysOnTop     bool              `json:"always_on_top"`
+	TestToneHz      float64           `json:"test_tone_hz"`
+	TXFadeEnabled   bool              `json:"tx_fade_enabled"`
+	TXFadeMS        float64           `json:"tx_fade_ms"`
+	GlobalPresets   [3]globalPreset   `json:"global_presets"`
+	Signaling       signalingSettings `json:"signaling"`
 }
 
 type globalPreset struct {
@@ -278,17 +325,30 @@ type app struct {
 	lastDefaultCheck        time.Time
 	safetyWasMuted          bool
 	voiceOriginalPreview    bool
+	rxWDSP                  *wdsp.Chain
+	signalEditorOpen        bool
+	signalTab               string
+	signalSelected          int
+	signalDrag              int
+	signalPaletteDrag       string
+	signalPianoBase         int
+	signalSequencer         *signalSequencer
+	signalPreview           bool
+	signalEnding            bool
+	signalMonitorTemporary  bool
+	signalEditingCallsign   bool
 }
 
 func main() {
 	p := audio.NewProcessor(audio.DefaultSampleRate)
 	monitor, monitorErr := audioio.NewPlaybackMonitor()
-	txSignal := &testToneProcessor{base: p, monitor: monitor}
+	signalSequencer := newSignalSequencer()
+	txSignal := &testToneProcessor{base: p, monitor: monitor, sequencer: signalSequencer}
 	e, err := audioio.New(txSignal)
 	if err != nil {
 		panic(err)
 	}
-	a := &app{processor: p, engine: e, config: audio.DefaultConfig(), spectrum: make([]float32, 257), dragEQ: -1, cutoffDrag: -1, controlDrag: -1, notchDrag: -1, echoDrag: -1, presetOverwrite: -1, openDeviceMenu: -1, line: ptt.RTS, mode: "tx", radioState: stateTXReady, txSignal: txSignal, monitor: monitor}
+	a := &app{processor: p, engine: e, config: audio.DefaultConfig(), spectrum: make([]float32, 257), dragEQ: -1, cutoffDrag: -1, controlDrag: -1, notchDrag: -1, echoDrag: -1, presetOverwrite: -1, openDeviceMenu: -1, line: ptt.RTS, mode: "tx", radioState: stateTXReady, txSignal: txSignal, monitor: monitor, signalSequencer: signalSequencer, signalSelected: -1, signalDrag: -1, signalPianoBase: 48}
 	defer func() {
 		_ = a.ptt.SetTX(false)
 		a.ptt.Close()
@@ -300,18 +360,24 @@ func main() {
 		if a.rxView.engine != nil {
 			a.rxView.engine.Close()
 		}
+		if a.rxWDSP != nil {
+			a.rxWDSP.Close()
+		}
 		if a.monitor != nil {
 			a.monitor.Close()
 		}
 	}()
 	a.load()
+	a.signalSequencer.SetCueVolume(a.settings.Signaling.RXCueVolume)
 	a.txSignal.frequencyHz.Store(int64(math.Round(a.settings.TestToneHz)))
 	a.refreshDevices()
 	a.applyDSP()
 	a.activeTab = validTab(a.settings.TXActiveTab)
 	a.txView = a.snapshotView()
 	rxProcessor := audio.NewProcessor(audio.DefaultSampleRate)
-	rxEngine, err := audioio.New(rxProcessor)
+	a.rxWDSP = wdsp.NewChain(rxProcessor)
+	a.rxWDSP.Configure(a.settings.RXWDSP)
+	rxEngine, err := audioio.New(a.rxWDSP)
 	if err != nil {
 		panic(err)
 	}
@@ -342,6 +408,12 @@ func main() {
 	}
 	if !a.rxView.gainEnabled {
 		rxEffective.OutputGainDB = 0
+	}
+	if a.settings.RXWDSP.Engine == wdsp.EngineWDSP {
+		// WDSP owns RX noise reduction from the first audio block. Without this,
+		// RX starts with both reducers active. This also keeps BYPASS truly dry:
+		// disabling WDSP must never reveal the classic reducer underneath it.
+		rxEffective.NoiseEnabled = false
 	}
 	rxProcessor.Configure(rxEffective)
 	if a.settings.RXInput != "" && a.settings.RXOutput != "" {
@@ -441,18 +513,10 @@ func (a *app) switchMode(mode string) {
 	if mode == a.mode {
 		return
 	}
-	if a.ptt.TX() {
-		a.pttStartedFromRX = false
-		a.setTX(false)
-	}
-	if mode == "rx" {
-		a.txSignal.enabled.Store(false)
-	}
-	previousMode := a.mode
+	// RX/TX selects the profile being edited; it must not alter live audio.
+	// Stream lifecycle and the physical radio direction belong exclusively to
+	// setTX, reconnectAudio and the explicit monitor controls.
 	a.storeActiveView()
-	if previousMode == "tx" {
-		a.engine.Stop()
-	}
 	if mode == "rx" {
 		a.loadView(a.rxView)
 	} else {
@@ -460,28 +524,7 @@ func (a *app) switchMode(mode string) {
 	}
 	a.mode = mode
 	a.applyDSP()
-	if len(a.inputs) > 0 && len(a.outputs) > 0 {
-		var err error
-		if mode == "rx" {
-			err = a.startRXMonitor()
-		} else if !a.engine.Status().Running {
-			a.prepareTXPlayback()
-			err = a.engine.Start(a.inIndex, a.outIndex)
-		}
-		if err != nil {
-			a.message, a.radioState = err.Error(), stateError
-		} else {
-			a.message = strings.ToUpper(mode) + " active"
-			if mode == "rx" {
-				a.radioState = stateRX
-			} else {
-				a.radioState = stateTXReady
-			}
-		}
-	} else {
-		a.radioState = stateError
-		a.message = "No audio devices available for " + strings.ToUpper(mode)
-	}
+	a.message = strings.ToUpper(mode) + " controls"
 	a.openDeviceMenu = -1
 }
 
@@ -617,11 +660,19 @@ func (a *app) setTX(enabled bool) bool {
 	}
 	if enabled {
 		a.stopRXMonitor()
-		if a.settings.TXFadeEnabled {
+		if a.settings.Signaling.StartEnabled && len(a.settings.Signaling.Start) > 0 {
+			a.txSignal.cancelFade()
+		} else if a.settings.TXFadeEnabled {
 			a.txSignal.startFade(a.settings.TXFadeMS)
 		} else {
 			a.txSignal.cancelFade()
 		}
+	} else if a.ptt.TX() && a.settings.Signaling.EndEnabled && len(a.settings.Signaling.End) > 0 && !a.signalEnding {
+		a.ensureSignalMonitor()
+		a.signalEnding = true
+		a.signalSequencer.Start(a.settings.Signaling.End)
+		a.message = "Playing Roger Beep"
+		return true
 	} else {
 		a.txSignal.cancelFade()
 	}
@@ -640,10 +691,18 @@ func (a *app) setTX(enabled bool) bool {
 		return false
 	}
 	if enabled {
+		if a.settings.Signaling.StartEnabled && len(a.settings.Signaling.Start) > 0 {
+			a.ensureSignalMonitor()
+			// The short hidden pause gives the radio time to key before the first note.
+			sequence := append([]signalBlock{{Type: signalPause, DurationMS: 80}}, a.settings.Signaling.Start...)
+			a.signalSequencer.Start(sequence)
+		}
 		a.txSince = time.Now()
 		a.message, a.radioState = "Radio transmitting", stateTransmitting
 	} else {
 		a.txSignal.enabled.Store(false)
+		a.signalEnding = false
+		a.stopTemporarySignalMonitor()
 		if err := a.startRXMonitor(); err != nil {
 			a.message, a.radioState = "Radio in RX, but monitoring failed: "+err.Error(), stateError
 			return false
@@ -658,6 +717,19 @@ func (a *app) setTX(enabled bool) bool {
 }
 
 func (a *app) update(mouse rl.Vector2) {
+	if a.signalSequencer != nil && a.signalSequencer.Done() {
+		if a.signalEnding {
+			a.setTX(false)
+		} else if a.signalPreview {
+			a.signalPreview = false
+			a.stopTemporarySignalMonitor()
+		} else if a.ptt.TX() && a.settings.TXFadeEnabled {
+			a.stopTemporarySignalMonitor()
+			a.txSignal.startFade(a.settings.TXFadeMS)
+		} else {
+			a.stopTemporarySignalMonitor()
+		}
+	}
 	a.updateDefaultRXOutput()
 	active := a.txSignal != nil && a.txSignal.safetyActive.Load()
 	if active && !a.safetyWasMuted {
@@ -673,9 +745,15 @@ func (a *app) update(mouse rl.Vector2) {
 		return
 	}
 	if rl.IsKeyPressed(rl.KeyEscape) {
+		if a.signalSequencer != nil {
+			a.signalSequencer.Stop()
+		}
+		a.signalEnding = true
 		if a.ptt.TX() {
 			a.setTX(false)
 		}
+		a.signalEnding = false
+		a.stopTemporarySignalMonitor()
 		a.keyPTTActive, a.mousePTTActive = false, false
 		a.message = "TX stopped"
 		if a.pttSettingsOpen {
@@ -692,7 +770,9 @@ func (a *app) update(mouse rl.Vector2) {
 		a.processor.Spectrum(a.spectrum, 10000)
 		return
 	}
-	a.updateKeyboardPTT()
+	if !a.signalEditorOpen {
+		a.updateKeyboardPTT()
+	}
 	if a.openDeviceMenu >= 0 {
 		a.updateDeviceMenu(mouse)
 		a.processor.Spectrum(a.spectrum, 10000)
@@ -712,6 +792,11 @@ func (a *app) update(mouse rl.Vector2) {
 	}
 	if clicked(mouse, rl.NewRectangle(760, 22, 100, 48)) {
 		a.switchMode("tx")
+		return
+	}
+	if clicked(mouse, rl.NewRectangle(870, 22, 40, 48)) {
+		a.signalEditorOpen = !a.signalEditorOpen
+		a.signalSelected, a.signalDrag = -1, -1
 		return
 	}
 	if clicked(mouse, onTopButtonRectangle()) {
@@ -740,10 +825,10 @@ func (a *app) update(mouse rl.Vector2) {
 		}
 		a.openDeviceMenu, a.deviceMenuScroll = 1, initialDeviceScroll(selected, count)
 	}
-	if clicked(mouse, rl.NewRectangle(920, 22, 200, 48)) && len(a.ports) > 0 {
+	if clicked(mouse, rl.NewRectangle(920, 22, 200, 48)) && !a.ptt.Connected() && len(a.ports) > 1 {
 		a.comIndex = (a.comIndex + 1) % len(a.ports)
 	}
-	if clicked(mouse, rl.NewRectangle(1130, 22, 75, 48)) {
+	if clicked(mouse, rl.NewRectangle(1130, 22, 75, 48)) && !a.ptt.Connected() {
 		if a.line == ptt.RTS {
 			a.line = ptt.DTR
 		} else {
@@ -756,6 +841,11 @@ func (a *app) update(mouse rl.Vector2) {
 	if clicked(mouse, rl.NewRectangle(1380, 22, 190, 48)) {
 		a.pttSettingsOpen = true
 		a.capturingPTTKey = false
+	}
+	if a.signalEditorOpen {
+		a.updateSignalEditor(mouse)
+		a.processor.Spectrum(a.spectrum, 10000)
+		return
 	}
 	pttRect := pttRectangle()
 	if a.mode == "tx" && a.settings.PTTMode == "hold" {
@@ -786,7 +876,7 @@ func (a *app) update(mouse rl.Vector2) {
 		a.txSignal.resetSafety()
 		a.message = "TX protection manually reset"
 	}
-	if a.activeTab != 1 && !(a.mode == "tx" && (a.activeTab == 0 || a.activeTab == 4)) && clicked(mouse, rl.NewRectangle(1370, 665, 180, 46)) {
+	if a.activeTab != 1 && !(a.mode == "tx" && (a.activeTab == 0 || a.activeTab == 4)) && !(a.mode == "rx" && a.activeTab == 3) && clicked(mouse, rl.NewRectangle(1370, 665, 180, 46)) {
 		a.toggleActiveSection()
 	}
 	if a.activeTab == 1 {
@@ -1109,6 +1199,10 @@ func (a *app) updatePanelControls(mouse rl.Vector2) {
 		a.updateEchoControls(mouse)
 		return
 	}
+	if a.mode == "rx" && a.activeTab == 3 {
+		a.updateWDSPControls(mouse)
+		return
+	}
 	if a.activeTab == 3 {
 		speeds := []audio.NoiseSpeed{audio.NoiseSlow, audio.NoiseNormal, audio.NoiseFast}
 		for i, speed := range speeds {
@@ -1148,6 +1242,79 @@ func (a *app) updatePanelControls(mouse rl.Vector2) {
 		return
 	}
 	a.applyDSPAndSave()
+}
+
+func (a *app) updateWDSPControls(mouse rl.Vector2) {
+	config := a.settings.RXWDSP.Normalized()
+	changed := false
+	if clicked(mouse, wdspBypassRectangle()) {
+		a.toggleRXNoiseBypass()
+		a.applyDSPAndSave()
+		return
+	}
+	if clicked(mouse, wdspClassicRectangle()) {
+		config.Enabled, config.Engine = true, wdsp.EngineClassic
+		a.config.NoiseEnabled = true
+		changed = true
+	}
+	if clicked(mouse, wdspEngineRectangle()) {
+		config.Enabled, config.Engine = true, wdsp.EngineWDSP
+		changed = true
+	}
+	if clicked(mouse, wdspNR2Rectangle()) {
+		config.Algorithm, config.Enabled = wdsp.AlgorithmNR2, true
+		changed = true
+	}
+	if clicked(mouse, wdspNNRRectangle()) {
+		config.Algorithm, config.Enabled = wdsp.AlgorithmNNR, true
+		changed = true
+	}
+	if clicked(mouse, wdspStandardRectangle()) {
+		config.Model = wdsp.ModelStandard
+		changed = true
+	}
+	if clicked(mouse, wdspPremiumRectangle()) {
+		config.Model = wdsp.ModelPremium
+		changed = true
+	}
+	if clicked(mouse, wdspAutoNotchRectangle()) {
+		config.AutoNotch = !config.AutoNotch
+		changed = true
+	}
+	if clicked(mouse, wdspBlankerRectangle()) {
+		config.NoiseBlanker = !config.NoiseBlanker
+		changed = true
+	}
+	if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
+		if rl.CheckCollisionPointRec(mouse, expandedSliderHitbox(wdspReductionSliderRectangle())) {
+			a.controlDrag = 30
+		} else if rl.CheckCollisionPointRec(mouse, expandedSliderHitbox(wdspProtectionSliderRectangle())) {
+			a.controlDrag = 31
+		}
+	}
+	if rl.IsMouseButtonDown(rl.MouseLeftButton) {
+		switch a.controlDrag {
+		case 30:
+			config.Reduction = math.Round(sliderPercent(mouse.X, wdspReductionSliderRectangle())*20) * 5
+			changed = true
+		case 31:
+			config.SignalProtection = math.Round(sliderPercent(mouse.X, wdspProtectionSliderRectangle())*20) * 5
+			changed = true
+		}
+	}
+	if changed {
+		a.settings.RXWDSP = config.Normalized()
+		a.applyDSPAndSave()
+	}
+}
+
+func (a *app) toggleRXNoiseBypass() {
+	config := a.settings.RXWDSP.Normalized()
+	config.Enabled = !config.Enabled
+	a.settings.RXWDSP = config
+	if config.Engine == wdsp.EngineClassic {
+		a.config.NoiseEnabled = config.Enabled
+	}
 }
 
 func (a *app) updateEchoControls(mouse rl.Vector2) {
@@ -1478,7 +1645,14 @@ func (a *app) toggleActiveSection() {
 			a.config.Compressor.Enabled = !a.config.Compressor.Enabled
 		}
 	case 3:
-		a.config.NoiseEnabled = !a.config.NoiseEnabled
+		if a.mode == "rx" {
+			a.settings.RXWDSP.Enabled = !a.settings.RXWDSP.Enabled
+			if a.settings.RXWDSP.Engine == wdsp.EngineClassic {
+				a.config.NoiseEnabled = a.settings.RXWDSP.Enabled
+			}
+		} else {
+			a.config.NoiseEnabled = !a.config.NoiseEnabled
+		}
 	case 4:
 		if a.mode == "tx" {
 			a.config.Echo.Enabled = !a.config.Echo.Enabled
@@ -1501,6 +1675,9 @@ func (a *app) sectionEnabled(index int) bool {
 		}
 		return a.config.Compressor.Enabled
 	case 3:
+		if a.mode == "rx" {
+			return a.settings.RXWDSP.Enabled
+		}
 		return a.config.NoiseEnabled
 	case 4:
 		if a.mode == "tx" {
@@ -1522,10 +1699,19 @@ func (a *app) applyDSP() {
 	if !a.settings.GainEnabled {
 		effective.OutputGainDB = 0
 	}
+	if a.mode == "rx" && a.settings.RXWDSP.Engine == wdsp.EngineWDSP {
+		// Running two spectral reducers in series damages weak speech. WDSP owns
+		// noise reduction while the rest of IC-DSP remains in the RX chain. Keep
+		// classic NR off during WDSP bypass as well, so BYPASS is genuinely dry.
+		effective.NoiseEnabled = false
+	}
 	if a.mode == "tx" && effective.OutputGainDB+effective.TXPresenceDB > 18 {
 		effective.TXPresenceDB = max(0, 18-effective.OutputGainDB)
 	}
 	a.processor.Configure(effective)
+	if a.rxWDSP != nil {
+		a.rxWDSP.Configure(a.settings.RXWDSP)
+	}
 }
 
 func (a *app) applyDSPAndSave() {
@@ -1534,8 +1720,9 @@ func (a *app) applyDSPAndSave() {
 }
 
 func (a *app) draw(mouse rl.Vector2) {
+	selectEditorColors(a.mode)
 	status := a.engine.Status()
-	drawHeader(a, status)
+	drawHeader(a, status, mouse)
 	inputLabel, outputLabel := "MICROPHONE", "OUTPUT TO RADIO"
 	if a.mode == "rx" {
 		inputLabel, outputLabel = "INPUT FROM RADIO", "SPEAKERS"
@@ -1547,6 +1734,13 @@ func (a *app) draw(mouse rl.Vector2) {
 	drawSelector(30, 92, 710, inputLabel, deviceName(a.inputs, a.inIndex), mouse)
 	drawSelector(860, 92, 710, outputLabel, outputValue, mouse)
 	a.drawSpectrum(30, 175, 1540, 190)
+	if a.signalEditorOpen {
+		a.drawSignalEditor(mouse)
+		if a.openDeviceMenu >= 0 {
+			a.drawDeviceMenu(mouse)
+		}
+		return
+	}
 	a.drawMeters(status)
 	if a.mode == "tx" {
 		a.drawPTT(mouse)
@@ -1632,7 +1826,7 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 	}
 }
 
-func drawHeader(a *app, status audioio.Status) {
+func drawHeader(a *app, status audioio.Status, mouse rl.Vector2) {
 	drawMilitaryText("IC-RADIO", 38, 18, 42, rl.NewColor(18, 23, 25, 255))
 	drawText("By EA3IWW", 205, 42, 14, rl.NewColor(38, 43, 44, 255))
 	drawButton(onTopButtonRectangle(), "ON TOP", a.settings.AlwaysOnTop)
@@ -1648,15 +1842,41 @@ func drawHeader(a *app, status audioio.Status) {
 	drawText(state, 372, 30, 21, color.amber)
 	drawButton(rl.NewRectangle(650, 22, 100, 48), "RX", a.mode == "rx")
 	drawButton(rl.NewRectangle(760, 22, 100, 48), "TX", a.mode == "tx")
+	drawButton(rl.NewRectangle(870, 22, 40, 48), "CFG", a.signalEditorOpen)
 	portName := "SELECT COM"
 	if len(a.ports) > 0 {
 		portName = a.ports[a.comIndex].Name
 	}
-	drawButton(rl.NewRectangle(920, 22, 200, 48), portName, false)
-	drawButton(rl.NewRectangle(1130, 22, 75, 48), string(a.line), false)
+	portRect := rl.NewRectangle(920, 22, 200, 48)
+	lineRect := rl.NewRectangle(1130, 22, 75, 48)
+	portInteractive := !connected && len(a.ports) > 1
+	lineInteractive := !connected
+	drawHeaderField(portRect, "PORT", portName, portInteractive, mouse)
+	drawHeaderField(lineRect, "LINE", string(a.line), lineInteractive, mouse)
 	drawButton(rl.NewRectangle(1215, 22, 155, 48), "CONNECT", connected)
 	drawButton(rl.NewRectangle(1380, 22, 190, 48), "PTT SETTINGS", false)
 	_ = status
+}
+
+func drawHeaderField(r rl.Rectangle, label, value string, interactive bool, mouse rl.Vector2) {
+	if interactive {
+		drawButton(r, value, false)
+		drawText(label, int32(r.X+8), int32(r.Y+5), 9, color.muted)
+		// A native chevron communicates selection without relying on a font glyph.
+		x, y := r.X+r.Width-15, r.Y+r.Height/2+2
+		rl.DrawLineEx(rl.NewVector2(x-5, y-3), rl.NewVector2(x, y+2), 2, color.amber)
+		rl.DrawLineEx(rl.NewVector2(x, y+2), rl.NewVector2(x+5, y-3), 2, color.amber)
+		if rl.CheckCollisionPointRec(mouse, r) {
+			rl.DrawRectangleRoundedLines(r, .2, 8, color.amber)
+		}
+		return
+	}
+	// Read-only values use the same visual language as meters and status displays:
+	// flat glass, muted border and no hover response or button shadow.
+	drawDarkDisplay(r)
+	drawText(label+" · ESTADO", int32(r.X+9), int32(r.Y+5), 9, rl.NewColor(125, 139, 143, 255))
+	drawCentered(value, r, 16, color.muted, 7)
+	rl.DrawCircle(int32(r.X+r.Width-13), int32(r.Y+12), 3, rl.NewColor(92, 105, 108, 255))
 }
 
 func (a *app) drawRXPanel(status audioio.Status) {
@@ -1752,8 +1972,11 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 	for _, tick := range frequencyLabels {
 		xx := spectrumFrequencyX(graph, tick.hz)
 		labelX := xx - 22
+		if tick.hz == spectrumMinHz {
+			labelX = graph.X + 4
+		}
 		if tick.hz == spectrumMaxHz {
-			labelX = xx - 52
+			labelX = graph.X + graph.Width - 58
 		}
 		drawText(tick.label, int32(labelX), int32(y+h-20), 14, color.muted)
 	}
@@ -2093,7 +2316,7 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 			for glow := 5; glow >= 1; glow-- {
 				expand := float32(glow)
 				gr := rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2)
-				rl.DrawRectangleRounded(gr, .22, 10, rl.NewColor(color.amber.R, color.amber.G, color.amber.B, uint8(3+glow*3)))
+				rl.DrawRectangleRounded(gr, .22, 10, rl.NewColor(editorColor.accent.R, editorColor.accent.G, editorColor.accent.B, uint8(3+glow*3)))
 			}
 		}
 		rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+5, r.Width, r.Height), .22, 10, rl.NewColor(5, 7, 8, 190))
@@ -2101,7 +2324,7 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 		rl.DrawLineEx(rl.NewVector2(r.X+18, r.Y+4), rl.NewVector2(r.X+r.Width-18, r.Y+4), 2, rl.NewColor(155, 160, 160, 90))
 		border := color.border
 		if active {
-			border = color.amber
+			border = editorColor.accent
 		} else if hovered {
 			border = rl.NewColor(105, 128, 143, 255)
 		}
@@ -2112,11 +2335,11 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 		}
 		rl.DrawCircle(int32(r.X+20), int32(r.Y+r.Height/2), 6, stateColor)
 		if active {
-			rl.DrawRectangleRounded(rl.NewRectangle(r.X+12, r.Y+r.Height-6, r.Width-24, 5), 1, 5, color.amber)
+			rl.DrawRectangleRounded(rl.NewRectangle(r.X+12, r.Y+r.Height-6, r.Width-24, 5), 1, 5, editorColor.accent)
 		}
 		c := color.text
 		if active {
-			c = color.amber
+			c = editorColor.accent
 		}
 		drawCentered(label, r, 20, c, 0)
 	}
@@ -2125,7 +2348,10 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 func (a *app) drawDSPPanel() {
 	r := rl.NewRectangle(35, 650, 1530, 210)
 	drawMetalControlPanel(r)
-	if a.activeTab != 1 && !(a.mode == "tx" && (a.activeTab == 0 || a.activeTab == 4)) {
+	// A fine outer keyline identifies which independent profile is being
+	// edited, even when every control in the current section is disabled.
+	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+3, r.Y+3, r.Width-6, r.Height-6), .04, 8, editorColor.outline)
+	if a.activeTab != 1 && !(a.mode == "tx" && (a.activeTab == 0 || a.activeTab == 4)) && !(a.mode == "rx" && a.activeTab == 3) {
 		drawSectionToggle(a.sectionEnabled(a.activeTab))
 	}
 	switch a.activeTab {
@@ -2305,6 +2531,10 @@ func (a *app) drawNotch() {
 }
 
 func (a *app) drawNoiseReduction() {
+	if a.mode == "rx" {
+		a.drawWDSPNoiseReduction()
+		return
+	}
 	drawText("NOISE REDUCTION", 55, 680, 25, dspColor.amber)
 	drawText("Reduction level", 55, 715, 20, dspColor.muted)
 	drawValueSlider(a.config.NoiseStrength, fmt.Sprintf("%.0f %%", a.config.NoiseStrength), "0 %", "100 %")
@@ -2314,6 +2544,47 @@ func (a *app) drawNoiseReduction() {
 	for i, label := range labels {
 		drawButton(rl.NewRectangle(float32(1200+i*115), 742, 105, 42), label, a.config.NoiseSpeed == speeds[i])
 	}
+}
+
+func (a *app) drawWDSPNoiseReduction() {
+	config := a.settings.RXWDSP.Normalized()
+	drawRecessedControlWell(rl.NewRectangle(45, 660, 1510, 39), false)
+	drawText("WDSP NOISE REDUCTION", 65, 667, 20, dspColor.text)
+	statusLabel, statusColor := "WDSP · NOT FOUND", color.red
+	if a.rxWDSP != nil {
+		status := a.rxWDSP.Status()
+		if status.Available {
+			statusLabel, statusColor = "WDSP "+status.Version+" · READY", color.green
+		}
+	}
+	drawDarkDisplay(rl.NewRectangle(425, 666, 230, 28))
+	drawCentered(statusLabel, rl.NewRectangle(425, 666, 230, 28), 14, statusColor, 0)
+	drawButton(wdspBypassRectangle(), "BYPASS", !config.Enabled)
+
+	drawText("ENGINE", 65, 713, 15, dspColor.text)
+	drawButton(wdspClassicRectangle(), "CLASSIC", config.Engine == wdsp.EngineClassic)
+	drawButton(wdspEngineRectangle(), "WDSP", config.Engine == wdsp.EngineWDSP)
+	rl.DrawLine(530, 708, 530, 750, dspColor.border)
+	drawText("ALGORITHM", 555, 713, 15, dspColor.text)
+	drawButton(wdspNR2Rectangle(), "NR2", config.Algorithm == wdsp.AlgorithmNR2)
+	drawButton(wdspNNRRectangle(), "NNR", config.Algorithm == wdsp.AlgorithmNNR)
+	rl.DrawLine(990, 708, 990, 750, dspColor.border)
+	drawText("MODEL", 1015, 713, 15, dspColor.text)
+	drawButton(wdspStandardRectangle(), "STANDARD", config.Model == wdsp.ModelStandard)
+	drawButton(wdspPremiumRectangle(), "PREMIUM", config.Model == wdsp.ModelPremium)
+	if config.Algorithm == wdsp.AlgorithmNR2 {
+		drawText("NNR ONLY", 1452, 748, 10, dspColor.muted)
+	}
+
+	drawButton(wdspAutoNotchRectangle(), "AUTO NOTCH", config.AutoNotch)
+	drawButton(wdspBlankerRectangle(), "NOISE BLANKER", config.NoiseBlanker)
+	drawText("REDUCTION", 535, 770, 14, dspColor.text)
+	drawControlValue(rl.NewRectangle(690, 764, 90, 28), fmt.Sprintf("%.0f %%", config.Reduction))
+	drawMechanicalSlider(wdspReductionSliderRectangle(), config.Reduction, controlColor.active)
+	drawText("SIGNAL PROTECTION", 535, 808, 14, dspColor.text)
+	drawControlValue(rl.NewRectangle(690, 802, 90, 28), fmt.Sprintf("%.0f %%", config.SignalProtection))
+	drawMechanicalSlider(wdspProtectionSliderRectangle(), config.SignalProtection, controlColor.active)
+	drawCentered("NR2 / NNR: voice noise  ·  Auto Notch: carriers  ·  Noise Blanker: impulses", rl.NewRectangle(45, 837, 1510, 18), 13, dspColor.muted, 0)
 }
 
 func (a *app) drawGain() {
@@ -2426,10 +2697,13 @@ func drawRecessedControlWell(r rl.Rectangle, dark bool) {
 	rl.DrawRectangleRounded(r, .12, 8, fill)
 	rl.DrawLineEx(rl.NewVector2(r.X+12, r.Y+2), rl.NewVector2(r.X+r.Width-12, r.Y+2), 2, upper)
 	rl.DrawLineEx(rl.NewVector2(r.X+12, r.Y+r.Height-2), rl.NewVector2(r.X+r.Width-12, r.Y+r.Height-2), 2, lower)
-	rl.DrawRectangleRoundedLines(r, .12, 8, rl.NewColor(88, 96, 98, 190))
+	rl.DrawRectangleRoundedLines(r, .12, 8, editorColor.outline)
 }
 
 func drawMechanicalSlider(track rl.Rectangle, percent float64, active rl.Color) {
+	if active == controlColor.active {
+		active = editorColor.accent
+	}
 	percent = max(0, min(100, percent))
 	rl.DrawRectangleRounded(rl.NewRectangle(track.X, track.Y+2, track.Width, track.Height), .5, 8, rl.NewColor(8, 13, 15, 125))
 	rl.DrawRectangleRounded(track, .5, 8, controlColor.track)
@@ -2437,7 +2711,7 @@ func drawMechanicalSlider(track rl.Rectangle, percent float64, active rl.Color) 
 	if fill.Width > 0 {
 		rl.DrawRectangleRounded(rl.NewRectangle(fill.X-2, fill.Y-2, fill.Width+4, fill.Height+4), .5, 8, rl.NewColor(active.R, active.G, active.B, 32))
 		rl.DrawRectangleRounded(fill, .5, 8, active)
-		rl.DrawRectangleRounded(rl.NewRectangle(fill.X, fill.Y+fill.Height-3, fill.Width, 3), .5, 8, controlColor.activeEdge)
+		rl.DrawRectangleRounded(rl.NewRectangle(fill.X, fill.Y+fill.Height-3, fill.Width, 3), .5, 8, editorColor.edge)
 	}
 	handleX := track.X + track.Width*float32(percent/100)
 	drawMechanicalHandle(handleX, track.Y+track.Height/2, active, max(float32(10), track.Height*.82))
@@ -2461,16 +2735,16 @@ func drawSectionToggle(enabled bool) {
 
 func drawButton(r rl.Rectangle, label string, active bool) {
 	fill := color.panel2
-	border := color.border
+	border := editorColor.outline
 	textColor := color.text
 	if active {
-		fill = rl.NewColor(73, 51, 17, 255)
-		border = color.amber
-		textColor = rl.NewColor(255, 224, 151, 255)
+		fill = editorColor.fill
+		border = editorColor.accent
+		textColor = rl.NewColor(242, 250, 246, 255)
 		for glow := 5; glow >= 1; glow-- {
 			expand := float32(glow * 2)
 			glowRect := rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2)
-			rl.DrawRectangleRounded(glowRect, .18, 8, rl.NewColor(color.amber.R, color.amber.G, color.amber.B, uint8(6+glow*6)))
+			rl.DrawRectangleRounded(glowRect, .18, 8, rl.NewColor(editorColor.accent.R, editorColor.accent.G, editorColor.accent.B, uint8(6+glow*6)))
 		}
 	}
 	rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+4, r.Width, r.Height), .18, 6, rl.NewColor(3, 5, 6, 180))
@@ -2478,7 +2752,7 @@ func drawButton(r rl.Rectangle, label string, active bool) {
 	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+3), rl.NewVector2(r.X+r.Width-10, r.Y+3), 2, rl.NewColor(190, 196, 197, 80))
 	rl.DrawRectangleRoundedLines(r, .18, 6, border)
 	if active {
-		rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), .18, 6, rl.NewColor(255, 211, 91, 150))
+		rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), .18, 6, rl.NewColor(editorColor.accent.R, editorColor.accent.G, editorColor.accent.B, 150))
 	}
 	drawCenteredFitted(label, r, 18, textColor)
 }
@@ -2779,6 +3053,24 @@ func txPresenceSliderRectangle() rl.Rectangle {
 	return rl.NewRectangle(1150, 802, 345, 14)
 }
 
+func wdspClassicRectangle() rl.Rectangle  { return rl.NewRectangle(180, 706, 155, 42) }
+func wdspEngineRectangle() rl.Rectangle   { return rl.NewRectangle(345, 706, 155, 42) }
+func wdspNR2Rectangle() rl.Rectangle      { return rl.NewRectangle(680, 706, 130, 42) }
+func wdspNNRRectangle() rl.Rectangle      { return rl.NewRectangle(820, 706, 130, 42) }
+func wdspStandardRectangle() rl.Rectangle { return rl.NewRectangle(1110, 706, 180, 42) }
+func wdspPremiumRectangle() rl.Rectangle  { return rl.NewRectangle(1300, 706, 180, 42) }
+func wdspAutoNotchRectangle() rl.Rectangle {
+	return rl.NewRectangle(65, 770, 205, 42)
+}
+func wdspBlankerRectangle() rl.Rectangle { return rl.NewRectangle(280, 770, 220, 42) }
+func wdspBypassRectangle() rl.Rectangle  { return rl.NewRectangle(1370, 665, 170, 30) }
+func wdspReductionSliderRectangle() rl.Rectangle {
+	return rl.NewRectangle(810, 773, 675, 12)
+}
+func wdspProtectionSliderRectangle() rl.Rectangle {
+	return rl.NewRectangle(810, 811, 675, 12)
+}
+
 func tabRectangle(index int) rl.Rectangle {
 	return rl.NewRectangle(float32(35+index*306), 590, 296, 56)
 }
@@ -2933,9 +3225,11 @@ func (a *app) load() {
 	a.settings.FiltersEnabled, a.settings.GainEnabled = true, true
 	a.settings.PTTMode, a.settings.PTTKey = "hold", rl.KeySpace
 	a.settings.RXEmphasisMode, a.settings.RXEmphasisMix = "ssb", 50
+	a.settings.RXWDSP = wdsp.DefaultConfig()
 	a.settings.RXFollowDefault = true
 	a.settings.TestToneHz, a.settings.TXFadeMS = 1000, 750
 	a.settings.TXFadeEnabled = true
+	a.settings.Signaling = defaultSignalingSettings()
 	data, err := os.ReadFile(settingsPath())
 	if err != nil {
 		return
@@ -2996,6 +3290,16 @@ func (a *app) load() {
 				}
 			}
 		}
+		if a.settings.Version < 15 {
+			a.settings.Signaling = defaultSignalingSettings()
+		}
+		if a.settings.Version < 16 {
+			a.settings.RXWDSP = wdsp.DefaultConfig()
+		}
+		a.settings.RXWDSP = a.settings.RXWDSP.Normalized()
+		if a.settings.Signaling.RXCueVolume <= 0 {
+			a.settings.Signaling.RXCueVolume = .18
+		}
 		a.settings.TestToneHz = max(0, min(5000, a.settings.TestToneHz))
 		a.settings.TXFadeMS = max(0, min(3000, a.settings.TXFadeMS))
 		a.config.LowCutHz = max(spectrumMinHz, a.config.LowCutHz)
@@ -3028,7 +3332,7 @@ func (a *app) save() {
 			a.settings.RXOutput = a.rxView.outputs[a.rxView.outIndex].Name
 		}
 	}
-	a.settings.Version = 14
+	a.settings.Version = 16
 	path := settingsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return

@@ -2,6 +2,8 @@ $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $outputPath = Join-Path $projectRoot 'ic-radio.exe'
+$wdspPath = Join-Path $projectRoot 'runtime\wdsp.dll'
+$fftwPath = Join-Path $projectRoot 'runtime\libfftw3-3.dll'
 
 Write-Host 'Preparando compilacion de IC-RADIO...'
 
@@ -20,6 +22,9 @@ if (-not $compiler) {
 }
 if (-not $compiler) {
     throw 'No se encontró gcc.exe en PATH. Instala MinGW-w64 o w64devkit para compilar con CGO.'
+}
+if (-not (Test-Path -LiteralPath $wdspPath) -or -not (Test-Path -LiteralPath $fftwPath)) {
+    throw 'Falta el runtime portable WDSP. Ejecuta .\build-wdsp-windows.ps1 primero.'
 }
 
 $env:CC = $compiler.FullName
@@ -41,3 +46,4 @@ finally {
 }
 
 Write-Host "Compilacion completada: $outputPath" -ForegroundColor Green
+Write-Host "Runtime WDSP: $wdspPath" -ForegroundColor Green

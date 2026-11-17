@@ -13,6 +13,10 @@ microphone, process your voice, and route it to the radio USB audio input.
 - Eleven-band graphic equalizer up to 10 kHz, with reset and bypass.
 - Adjustable high-pass and low-pass voice filters.
 - RX notch filter with draggable frequency, width, and depth controls.
+- Portable WDSP 2.11 RX engine with NR2/NNR, automatic notch, impulse noise
+  blanker, Standard/Premium models, and automatic fallback to the classic DSP.
+- Sonic Sequencer for configurable PTT opening and closing cues, including
+  tones, pauses, sweeps, Morse callsigns, three waveforms, and live RX preview.
 - SSB voice emphasis and 50/75 µs FM de-emphasis.
 - TX compressor, configurable noise reduction, output gain, and presence.
 - TX echo with delay, feedback, mix, tone profiles, and quick presets.
@@ -43,7 +47,7 @@ in IC-RADIO. The Icom IC-7300 is supported but is not required.
 
 ## Windows installation
 
-Download `IC-RADIO-Windows-x64-v0.6.0.zip` from **Releases**, extract it, and
+Download `IC-RADIO-Windows-x64-v0.7.0.zip` from **Releases**, extract it, and
 run `ic-radio.exe`. Windows may display a warning because the executable is not
 digitally signed.
 
@@ -60,6 +64,18 @@ external IC-DSP checkout or Go module download is required.
 ```powershell
 .\build-radio-windows.ps1
 ```
+
+The portable release keeps `runtime/wdsp.dll` and `runtime/libfftw3-3.dll`
+beside the application directory. To reproduce those native binaries from the
+pinned official WDSP 2.11 source, install the MSYS2 UCRT64 GCC and FFTW
+packages, then run:
+
+```powershell
+.\build-wdsp-windows.ps1
+```
+
+WDSP and FFTW are GPL components. See `THIRD_PARTY_NOTICES.md` and the license
+copies under `THIRD_PARTY_LICENSES` before redistributing IC-RADIO.
 
 ## PTT safety
 

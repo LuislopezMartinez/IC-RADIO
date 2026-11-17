@@ -7,6 +7,7 @@ import (
 
 	audio "github.com/LuislopezMartinez/IC-DSP/audio-processing-core"
 	"github.com/LuislopezMartinez/IC-DSP/audio-processing-core/audioio"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/wdsp"
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
@@ -310,6 +311,87 @@ func TestViewSnapshotsKeepRXAndTXIndependent(t *testing.T) {
 	}
 }
 
+func TestSwitchModeOnlyChangesEditor(t *testing.T) {
+	txProcessor := audio.NewProcessor(audio.DefaultSampleRate)
+	rxProcessor := audio.NewProcessor(audio.DefaultSampleRate)
+	tone := &testToneProcessor{}
+	tone.enabled.Store(true)
+	a := app{
+		mode:      "tx",
+		processor: txProcessor,
+		config:    audio.DefaultConfig(),
+		settings:  settings{FiltersEnabled: true, GainEnabled: true},
+		txSignal:  tone,
+		rxView: viewState{
+			processor:      rxProcessor,
+			config:         audio.DefaultConfig(),
+			filtersEnabled: true,
+			gainEnabled:    true,
+		},
+	}
+	a.txView = a.snapshotView()
+
+	a.switchMode("rx")
+
+	if a.mode != "rx" || a.processor != rxProcessor {
+		t.Fatalf("switchMode no seleccionó el editor RX")
+	}
+	if !tone.enabled.Load() {
+		t.Fatal("cambiar de editor modificó el estado del audio TX")
+	}
+	if a.message != "RX controls" {
+		t.Fatalf("mensaje inesperado: %q", a.message)
+	}
+}
+
+func TestRXAndTXEditorsUseDifferentAccentFamilies(t *testing.T) {
+	selectEditorColors("rx")
+	rxAccent, rxOutline := editorColor.accent, editorColor.outline
+	selectEditorColors("tx")
+	txAccent, txOutline := editorColor.accent, editorColor.outline
+
+	if rxAccent == txAccent || rxOutline == txOutline {
+		t.Fatal("los editores RX y TX comparten la misma identidad cromática")
+	}
+	if rxAccent.G <= rxAccent.R || rxAccent.G <= rxAccent.B {
+		t.Fatalf("el acento RX no pertenece a la familia verde: %+v", rxAccent)
+	}
+	if txAccent.R <= txAccent.G || txAccent.G <= txAccent.B {
+		t.Fatalf("el acento TX no pertenece a la familia naranja: %+v", txAccent)
+	}
+}
+
+func TestRXNoiseBypassPreservesWDSPSettings(t *testing.T) {
+	a := app{settings: settings{RXWDSP: wdsp.Config{
+		Enabled: true, Engine: wdsp.EngineWDSP, Algorithm: wdsp.AlgorithmNNR,
+		Model: wdsp.ModelPremium, Reduction: 65, SignalProtection: 30,
+		AutoNotch: true, NoiseBlanker: true,
+	}}}
+	a.toggleRXNoiseBypass()
+	got := a.settings.RXWDSP
+	if got.Enabled {
+		t.Fatal("BYPASS no desactivó WDSP")
+	}
+	if got.Algorithm != wdsp.AlgorithmNNR || got.Model != wdsp.ModelPremium || got.Reduction != 65 || got.SignalProtection != 30 || !got.AutoNotch || !got.NoiseBlanker {
+		t.Fatalf("BYPASS alteró los ajustes WDSP: %+v", got)
+	}
+	a.toggleRXNoiseBypass()
+	if !a.settings.RXWDSP.Enabled {
+		t.Fatal("BYPASS no restauró WDSP")
+	}
+}
+
+func TestRXNoiseBypassAlsoControlsClassicReducer(t *testing.T) {
+	a := app{
+		config:   audio.Config{NoiseEnabled: true},
+		settings: settings{RXWDSP: wdsp.Config{Enabled: true, Engine: wdsp.EngineClassic}},
+	}
+	a.toggleRXNoiseBypass()
+	if a.config.NoiseEnabled {
+		t.Fatal("BYPASS dejó activo el reductor clásico")
+	}
+}
+
 func TestMeterGradientCoversFullSignalRange(t *testing.T) {
 	low := meterGradient(0)
 	middle := meterGradient(.56)
@@ -430,5 +512,96 @@ func TestTXEchoProducesDelayedSignal(t *testing.T) {
 	withoutEcho, withEcho := energyAfterDelay(false), energyAfterDelay(true)
 	if withEcho < withoutEcho*10 || withEcho < 1e-5 {
 		t.Fatalf("el eco no produjo una repetición clara: sin=%g con=%g", withoutEcho, withEcho)
+	}
+}
+
+func TestSignalNoteUsesEqualTemperedPitch(t *testing.T) {
+	if got := midiFrequency(69); math.Abs(got-440) > .001 {
+		t.Fatalf("A4 = %.3f Hz, want 440 Hz", got)
+	}
+	if got := noteLabel(60); got != "DO4" {
+		t.Fatalf("middle C label = %q, want DO4", got)
+	}
+}
+
+func TestSignalSequencerReplacesMicUntilSequenceEnds(t *testing.T) {
+	sequencer := newSignalSequencer()
+	if !sequencer.Start([]signalBlock{{Type: signalTone, Note: 69, DurationMS: 10}}) {
+		t.Fatal("sequence did not start")
+	}
+	samples := make([]float32, 960)
+	for i := range samples {
+		samples[i] = .75
+	}
+	if !sequencer.Render(samples) {
+		t.Fatal("active sequence did not replace microphone samples")
+	}
+	if math.Abs(float64(samples[20]-.75)) < .1 {
+		t.Fatal("microphone leaked through the signaling tone")
+	}
+	if samples[700] != .75 {
+		t.Fatalf("microphone did not return after sequence: %.3f", samples[700])
+	}
+}
+
+func TestMorseCallsignExpandsIntoToneAndSilence(t *testing.T) {
+	segments := expandSignalBlocks([]signalBlock{{Type: signalMorse, Note: 69, Callsign: "EA3", WPM: 18}})
+	tones, pauses := 0, 0
+	for _, segment := range segments {
+		if segment.tone {
+			tones++
+		} else {
+			pauses++
+		}
+	}
+	if tones < 8 || pauses < 7 {
+		t.Fatalf("EA3 Morse expansion too short: %d tones, %d pauses", tones, pauses)
+	}
+}
+
+func TestSignalWaveformsProduceDifferentShapes(t *testing.T) {
+	render := func(style string) []float32 {
+		sequencer := newSignalSequencer()
+		sequencer.Start([]signalBlock{{Type: signalTone, Note: 69, DurationMS: 20, Style: style}})
+		samples := make([]float32, 240)
+		sequencer.Render(samples)
+		return samples
+	}
+	sine, square, triangle := render("sine"), render("square"), render("triangle")
+	if sine[10] == square[10] || sine[10] == triangle[10] || square[10] == triangle[10] {
+		t.Fatalf("waveforms are not distinct: sine=%f square=%f triangle=%f", sine[10], square[10], triangle[10])
+	}
+}
+
+func TestPianoPreviewKeepsSelectedWaveform(t *testing.T) {
+	for _, style := range []string{"sine", "square", "triangle"} {
+		preview := pianoPreviewBlock(signalBlock{Type: signalTone, Note: 64, Style: style})
+		if preview.Style != style || preview.Note != 64 || preview.Type != signalTone {
+			t.Fatalf("piano preview lost block settings: got %+v", preview)
+		}
+	}
+}
+
+func TestSignalToneEnvelopePreventsEdgeClicks(t *testing.T) {
+	for _, style := range []string{"sine", "square", "triangle"} {
+		sequencer := newSignalSequencer()
+		sequencer.Start([]signalBlock{{Type: signalTone, Note: 69, DurationMS: 20, Style: style}})
+		samples := make([]float32, 960)
+		sequencer.Render(samples)
+		if math.Abs(float64(samples[0])) > .001 || math.Abs(float64(samples[959])) > .001 {
+			t.Fatalf("%s waveform has abrupt edges: first=%f last=%f", style, samples[0], samples[959])
+		}
+	}
+}
+
+func TestNewSignalBlockIsInsertedAfterSelectionOrAtEnd(t *testing.T) {
+	blocks := []signalBlock{{Type: signalTone, Note: 60}, {Type: signalTone, Note: 64}, {Type: signalTone, Note: 67}}
+	inserted, selected := insertSignalBlock(append([]signalBlock(nil), blocks...), signalBlock{Type: signalPause}, 0)
+	if selected != 1 || inserted[1].Type != signalPause || inserted[2].Note != 64 {
+		t.Fatalf("block was not inserted after selection: selected=%d blocks=%+v", selected, inserted)
+	}
+	appended, selected := insertSignalBlock(append([]signalBlock(nil), blocks...), signalBlock{Type: signalMorse}, -1)
+	if selected != 3 || appended[3].Type != signalMorse {
+		t.Fatalf("block was not appended without selection: selected=%d blocks=%+v", selected, appended)
 	}
 }
