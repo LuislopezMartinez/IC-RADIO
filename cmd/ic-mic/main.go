@@ -1836,10 +1836,11 @@ func drawHeader(a *app, status audioio.Status, mouse rl.Vector2) {
 	if connected {
 		dot, state = color.green, "RADIO CONNECTED"
 	}
-	drawDarkDisplay(rl.NewRectangle(325, 18, 300, 54))
+	drawEngravedPanel(rl.NewRectangle(325, 18, 300, 54))
 	rl.DrawCircle(350, 45, 10, rl.NewColor(dot.R/4, dot.G/4, dot.B/4, 255))
 	rl.DrawCircle(350, 45, 7, dot)
-	drawText(state, 372, 30, 21, color.amber)
+	rl.DrawRing(rl.NewVector2(350, 45), 8, 10, 0, 360, 24, rl.NewColor(dot.R, dot.G, dot.B, 70))
+	drawText(state, 372, 30, 21, dspColor.amber)
 	drawButton(rl.NewRectangle(650, 22, 100, 48), "RX", a.mode == "rx")
 	drawButton(rl.NewRectangle(760, 22, 100, 48), "TX", a.mode == "tx")
 	drawButton(rl.NewRectangle(870, 22, 40, 48), "CFG", a.signalEditorOpen)
@@ -1851,11 +1852,57 @@ func drawHeader(a *app, status audioio.Status, mouse rl.Vector2) {
 	lineRect := rl.NewRectangle(1130, 22, 75, 48)
 	portInteractive := !connected && len(a.ports) > 1
 	lineInteractive := !connected
-	drawHeaderField(portRect, "PORT", portName, portInteractive, mouse)
-	drawHeaderField(lineRect, "LINE", string(a.line), lineInteractive, mouse)
+	if connected {
+		drawHeaderTelemetry(rl.NewRectangle(920, 18, 285, 54), portName, string(a.line))
+	} else {
+		drawHeaderField(portRect, "PORT", portName, portInteractive, mouse)
+		drawHeaderField(lineRect, "LINE", string(a.line), lineInteractive, mouse)
+	}
 	drawButton(rl.NewRectangle(1215, 22, 155, 48), "CONNECT", connected)
-	drawButton(rl.NewRectangle(1380, 22, 190, 48), "PTT SETTINGS", false)
+	drawUtilityButton(rl.NewRectangle(1380, 22, 190, 48), "PTT SETTINGS", mouse)
 	_ = status
+}
+
+func drawHeaderTelemetry(r rl.Rectangle, port, line string) {
+	drawEngravedPanel(r)
+	separator := r.X + 205
+	rl.DrawLineEx(rl.NewVector2(separator, r.Y+8), rl.NewVector2(separator, r.Y+r.Height-8), 1, rl.NewColor(83, 88, 89, 170))
+	drawCentered("PORT", rl.NewRectangle(r.X, r.Y+4, 205, 18), 11, dspColor.muted, 0)
+	drawCentered(ellipsis(port, 18), rl.NewRectangle(r.X, r.Y+20, 205, 27), 18, dspColor.text, 0)
+	drawCentered("LINE", rl.NewRectangle(separator, r.Y+4, r.Width-205, 18), 11, dspColor.muted, 0)
+	drawCentered(line, rl.NewRectangle(separator, r.Y+20, r.Width-205, 27), 18, dspColor.text, 0)
+}
+
+func drawEngravedPanel(r rl.Rectangle) {
+	fill := rl.NewColor(188, 191, 190, 255)
+	rl.DrawRectangleRounded(r, .12, 8, fill)
+	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+2), rl.NewVector2(r.X+r.Width-10, r.Y+2), 2, rl.NewColor(245, 247, 246, 175))
+	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+r.Height-2), rl.NewVector2(r.X+r.Width-10, r.Y+r.Height-2), 2, rl.NewColor(72, 78, 79, 130))
+	rl.DrawRectangleRoundedLines(r, .12, 8, rl.NewColor(103, 108, 109, 185))
+}
+
+func drawUtilityButton(r rl.Rectangle, label string, mouse rl.Vector2) {
+	fill := rl.NewColor(199, 201, 200, 255)
+	border := rl.NewColor(88, 94, 95, 230)
+	if rl.CheckCollisionPointRec(mouse, r) {
+		fill = rl.NewColor(214, 216, 215, 255)
+		border = rl.NewColor(48, 57, 59, 255)
+	}
+	rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+3, r.Width, r.Height), .16, 7, rl.NewColor(20, 24, 25, 85))
+	rl.DrawRectangleRounded(r, .16, 7, fill)
+	rl.DrawRectangleRoundedLines(r, .16, 7, border)
+	drawGearIcon(rl.NewVector2(r.X+25, r.Y+r.Height/2), 10, dspColor.text)
+	drawCentered(label, rl.NewRectangle(r.X+37, r.Y, r.Width-42, r.Height), 17, dspColor.text, 0)
+}
+
+func drawGearIcon(center rl.Vector2, radius float32, c rl.Color) {
+	rl.DrawRing(center, radius*.45, radius*.68, 0, 360, 24, c)
+	for i := 0; i < 8; i++ {
+		angle := float64(i) * math.Pi / 4
+		inner := rl.NewVector2(center.X+float32(math.Cos(angle))*radius*.72, center.Y+float32(math.Sin(angle))*radius*.72)
+		outer := rl.NewVector2(center.X+float32(math.Cos(angle))*radius, center.Y+float32(math.Sin(angle))*radius)
+		rl.DrawLineEx(inner, outer, 3, c)
+	}
 }
 
 func drawHeaderField(r rl.Rectangle, label, value string, interactive bool, mouse rl.Vector2) {
@@ -1871,12 +1918,11 @@ func drawHeaderField(r rl.Rectangle, label, value string, interactive bool, mous
 		}
 		return
 	}
-	// Read-only values use the same visual language as meters and status displays:
-	// flat glass, muted border and no hover response or button shadow.
-	drawDarkDisplay(r)
-	drawText(label+" · ESTADO", int32(r.X+9), int32(r.Y+5), 9, rl.NewColor(125, 139, 143, 255))
-	drawCentered(value, r, 16, color.muted, 7)
-	rl.DrawCircle(int32(r.X+r.Width-13), int32(r.Y+12), 3, rl.NewColor(92, 105, 108, 255))
+	// Read-only values are engraved into the fascia: no hover response, glow,
+	// button shadow or other affordance suggesting they can be pressed.
+	drawEngravedPanel(r)
+	drawCentered(label, rl.NewRectangle(r.X, r.Y+3, r.Width, 16), 10, dspColor.muted, 0)
+	drawCentered(value, rl.NewRectangle(r.X+6, r.Y+18, r.Width-12, 25), 16, dspColor.text, 0)
 }
 
 func (a *app) drawRXPanel(status audioio.Status) {
@@ -2550,15 +2596,16 @@ func (a *app) drawWDSPNoiseReduction() {
 	config := a.settings.RXWDSP.Normalized()
 	drawRecessedControlWell(rl.NewRectangle(45, 660, 1510, 39), false)
 	drawText("WDSP NOISE REDUCTION", 65, 667, 20, dspColor.text)
-	statusLabel, statusColor := "WDSP · NOT FOUND", color.red
+	statusLabel, statusColor := "WDSP · NOT FOUND", rl.NewColor(145, 35, 42, 255)
 	if a.rxWDSP != nil {
 		status := a.rxWDSP.Status()
 		if status.Available {
-			statusLabel, statusColor = "WDSP "+status.Version+" · READY", color.green
+			statusLabel, statusColor = "WDSP "+status.Version+" · READY", rl.NewColor(18, 112, 67, 255)
 		}
 	}
-	drawDarkDisplay(rl.NewRectangle(425, 666, 230, 28))
-	drawCentered(statusLabel, rl.NewRectangle(425, 666, 230, 28), 14, statusColor, 0)
+	statusRect := rl.NewRectangle(425, 664, 230, 30)
+	drawEngravedPanel(statusRect)
+	drawCentered(statusLabel, statusRect, 14, statusColor, 0)
 	drawButton(wdspBypassRectangle(), "BYPASS", !config.Enabled)
 
 	drawText("ENGINE", 65, 713, 15, dspColor.text)

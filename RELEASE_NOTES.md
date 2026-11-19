@@ -1,32 +1,25 @@
-# IC-RADIO v0.7.0
+# IC-RADIO v0.7.1
 
-This release substantially expands RX processing and adds programmable audio
-signalling around PTT operation.
+This maintenance release refines the rack-style interface introduced in the
+0.7 series, making status information clearer and reducing controls that could
+be mistaken for active buttons.
 
 ## Highlights
 
-- Portable WDSP 2.11 receive engine with NR2 and NNR noise reduction.
-- Standard and Premium NNR models, automatic notch filtering, impulse-noise
-  blanking, adjustable reduction, and signal protection.
-- Safe automatic fallback to the classic DSP if the native WDSP runtime is not
-  available or stops processing.
-- True RX noise-reduction bypass without accidentally enabling two reducers in
-  series.
-- New Sonic Sequencer for configurable PTT opening and closing cues.
-- Build cues from tones, pauses, sweeps, or an automatically generated Morse
-  callsign; reorder blocks and preview the complete sequence in RX.
-- Piano-style note selection, sine/square/triangle waveforms, octave controls,
-  selectable durations, and adjustable RX cue volume.
-- Click-free cue envelopes and isolation from stale voice-DSP or echo state.
-- RX and TX selectors now change the editor without interrupting live audio or
-  altering the physical PTT state.
-- Distinct RX and TX editor accent colours and expanded regression coverage.
-- Reproducible WDSP build script pinned to the official upstream source, with
-  bundled FFTW runtime, third-party notices, and GPL license copies.
+- Redesigned connection indicator with an engraved aluminium panel and a
+  clearer illuminated status LED.
+- Connected port and PTT line are now grouped into compact read-only telemetry
+  instead of appearing as interactive controls.
+- Read-only header fields use engraved fascia styling without hover or button
+  affordances.
+- `PTT SETTINGS` now has a distinct utility-button treatment and gear icon.
+- WDSP availability is shown in a brighter engraved status plate with improved
+  contrast for ready and unavailable states.
+- Small spacing and hierarchy refinements across the top rack panel.
 
 ## Download
 
-Download `IC-RADIO-Windows-x64-v0.7.0.zip`, extract the complete folder, and
+Download `IC-RADIO-Windows-x64-v0.7.1.zip`, extract the complete folder, and
 run `ic-radio.exe`. Keep the `runtime` directory beside the executable so WDSP
 can load. The executable is unsigned, so Windows may request confirmation the
 first time it is launched.
