@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
+
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
 )
@@ -43,6 +45,7 @@ type Controller struct {
 	portName string
 	line     Line
 	tx       bool
+	radio    *civ.Session
 }
 
 func (c *Controller) Connect(portName string, line Line) error {
@@ -74,6 +77,23 @@ func (c *Controller) Connect(portName string, line Line) error {
 	}
 	c.port, c.portName, c.line = port, portName, line
 	return nil
+}
+
+func (c *Controller) StartCIV(address byte) (*civ.Session, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.port == nil {
+		return nil, fmt.Errorf("COM not connected")
+	}
+	if c.radio != nil {
+		return c.radio, nil
+	}
+	session, err := civ.Start(c.port, address)
+	if err != nil {
+		return nil, err
+	}
+	c.radio = session
+	return session, nil
 }
 
 func (c *Controller) SetTX(enabled bool) error {
@@ -118,6 +138,10 @@ func (c *Controller) closeLocked() {
 	if c.port != nil {
 		_ = c.port.SetRTS(false)
 		_ = c.port.SetDTR(false)
+		if c.radio != nil {
+			c.radio.Close()
+			c.radio = nil
+		}
 		_ = c.port.Close()
 	}
 	c.port, c.portName, c.tx = nil, "", false

@@ -43,14 +43,14 @@ var color = struct {
 var dspColor = struct {
 	text, muted, amber, border rl.Color
 }{
-	rl.NewColor(8, 11, 12, 255), rl.NewColor(35, 40, 42, 255),
-	rl.NewColor(128, 72, 0, 255), rl.NewColor(73, 79, 80, 225),
+	rl.NewColor(238, 244, 247, 255), rl.NewColor(169, 192, 202, 255),
+	rl.NewColor(255, 193, 40, 255), rl.NewColor(75, 111, 125, 225),
 }
 
 var controlColor = struct {
 	well, track, inactive, active, activeEdge, eqLine rl.Color
 }{
-	rl.NewColor(182, 187, 186, 255), rl.NewColor(38, 52, 58, 255), rl.NewColor(52, 69, 77, 255),
+	rl.NewColor(19, 34, 44, 255), rl.NewColor(38, 52, 58, 255), rl.NewColor(52, 69, 77, 255),
 	rl.NewColor(255, 193, 40, 255), rl.NewColor(180, 91, 0, 255), rl.NewColor(31, 205, 220, 255),
 }
 
@@ -79,7 +79,7 @@ func selectEditorColors(mode string) {
 	editorColor.outline = rl.NewColor(255, 132, 42, 95)
 }
 
-var regularFont, semiboldFont, militaryFont rl.Font
+var regularFont, semiboldFont, militaryFont, displayFont rl.Font
 
 type testToneProcessor struct {
 	base             *audio.Processor
@@ -213,6 +213,8 @@ func (p *testToneProcessor) resetSafety() {
 }
 
 type settings struct {
+	CIVAddress      string            `json:"civ_address"`
+	DisableCIV      bool              `json:"disable_civ"`
 	Version         int               `json:"version"`
 	Input           string            `json:"input"`
 	Output          string            `json:"output"`
@@ -279,6 +281,7 @@ type viewState struct {
 }
 
 type app struct {
+	radio                   radioPanel
 	processor               *audio.Processor
 	engine                  *audioio.Engine
 	ptt                     ptt.Controller
@@ -439,10 +442,15 @@ func main() {
 	rl.SetConfigFlags(windowFlags)
 	rl.InitWindow(1280, 720, "IC-RADIO · RX/TX Transceiver Console · By EA3IWW")
 	defer rl.CloseWindow()
+	defer a.radio.unload()
 	codepoints := latinCodepoints()
 	regularFont = rl.LoadFontFromMemory(".ttf", appfonts.InterRegular, 64, codepoints)
 	semiboldFont = rl.LoadFontFromMemory(".ttf", appfonts.InterSemiBold, 72, codepoints)
 	militaryFont = rl.LoadFontFromMemory(".ttf", appfonts.BlackOpsOne, 96, codepoints)
+	displayFont = rl.LoadFontFromMemory(".ttf", appfonts.RajdhaniBold, 120, codepoints)
+	rl.GenTextureMipmaps(&displayFont.Texture)
+	rl.SetTextureFilter(displayFont.Texture, rl.FilterTrilinear)
+	defer rl.UnloadFont(displayFont)
 	rl.SetTextureFilter(regularFont.Texture, rl.FilterBilinear)
 	rl.SetTextureFilter(semiboldFont.Texture, rl.FilterBilinear)
 	rl.SetTextureFilter(militaryFont.Texture, rl.FilterBilinear)
@@ -460,7 +468,7 @@ func main() {
 		destination := destinationRect()
 		camera := rl.NewCamera2D(rl.NewVector2(destination.X, destination.Y), rl.Vector2{}, 0, destination.Width/viewW)
 		rl.BeginMode2D(camera)
-		drawRackChassis()
+		drawConsoleChassis()
 		a.draw(mouse)
 		rl.EndMode2D()
 		rl.EndDrawing()
@@ -633,6 +641,15 @@ func (a *app) connectPTT() {
 		return
 	}
 	a.settings.COM, a.settings.PTTLine = a.ports[a.comIndex].Name, a.line
+	a.radio.session = nil
+	if !a.settings.DisableCIV {
+		session, err := a.ptt.StartCIV(a.civAddress())
+		if err != nil {
+			a.message = err.Error()
+			return
+		}
+		a.radio.session = session
+	}
 	a.message = "PTT connected on " + a.settings.COM + " · " + string(a.line)
 	a.save()
 }
@@ -760,6 +777,7 @@ func (a *app) update(mouse rl.Vector2) {
 			a.capturingPTTKey, a.pttSettingsOpen = false, false
 		}
 		a.openDeviceMenu = -1
+		a.radio.cancelInput()
 	}
 	if a.ptt.TX() && time.Since(a.txSince) >= maxTXDuration {
 		a.setTX(false)
@@ -770,7 +788,7 @@ func (a *app) update(mouse rl.Vector2) {
 		a.processor.Spectrum(a.spectrum, 10000)
 		return
 	}
-	if !a.signalEditorOpen {
+	if a.radio.page != pageConfig && !a.radio.editing && !a.radio.cancelled && !a.radio.modeMenu && !a.radio.bands.open && a.radio.bands.requestAt.IsZero() {
 		a.updateKeyboardPTT()
 	}
 	if a.openDeviceMenu >= 0 {
@@ -786,34 +804,29 @@ func (a *app) update(mouse rl.Vector2) {
 		a.echoDrag = -1
 		a.txGainDrag = false
 	}
-	if clicked(mouse, rl.NewRectangle(650, 22, 100, 48)) {
-		a.switchMode("rx")
+	if a.updateNavigation(mouse) {
 		return
 	}
-	if clicked(mouse, rl.NewRectangle(760, 22, 100, 48)) {
+	if a.radio.page == pageOperation {
+		a.updateOperation(mouse)
+		return
+	}
+	if a.radio.page == pageConfig {
+		a.updateRadioConfig(mouse)
+		return
+	}
+	if clicked(mouse, audioProfileRect(0)) {
 		a.switchMode("tx")
 		return
 	}
-	if clicked(mouse, rl.NewRectangle(870, 22, 40, 48)) {
-		a.signalEditorOpen = !a.signalEditorOpen
-		a.signalSelected, a.signalDrag = -1, -1
+	if clicked(mouse, audioProfileRect(1)) {
+		a.switchMode("rx")
 		return
 	}
-	if clicked(mouse, onTopButtonRectangle()) {
-		a.settings.AlwaysOnTop = !a.settings.AlwaysOnTop
-		if a.settings.AlwaysOnTop {
-			rl.SetWindowState(rl.FlagWindowTopmost)
-			a.message = "Always-on-top enabled"
-		} else {
-			rl.ClearWindowState(rl.FlagWindowTopmost)
-			a.message = "Normal window mode"
-		}
-		a.save()
-	}
-	if clicked(mouse, rl.NewRectangle(30, 92, 710, 64)) && len(a.inputs) > 0 {
+	if clicked(mouse, audioDeviceRect(0)) && len(a.inputs) > 0 {
 		a.openDeviceMenu, a.deviceMenuScroll = 0, initialDeviceScroll(a.inIndex, len(a.inputs))
 	}
-	if clicked(mouse, rl.NewRectangle(860, 92, 710, 64)) && len(a.outputs) > 0 {
+	if clicked(mouse, audioDeviceRect(1)) && len(a.outputs) > 0 {
 		selected, count := a.outIndex, len(a.outputs)
 		if a.mode == "rx" {
 			count++
@@ -824,40 +837,6 @@ func (a *app) update(mouse rl.Vector2) {
 			}
 		}
 		a.openDeviceMenu, a.deviceMenuScroll = 1, initialDeviceScroll(selected, count)
-	}
-	if clicked(mouse, rl.NewRectangle(920, 22, 200, 48)) && !a.ptt.Connected() && len(a.ports) > 1 {
-		a.comIndex = (a.comIndex + 1) % len(a.ports)
-	}
-	if clicked(mouse, rl.NewRectangle(1130, 22, 75, 48)) && !a.ptt.Connected() {
-		if a.line == ptt.RTS {
-			a.line = ptt.DTR
-		} else {
-			a.line = ptt.RTS
-		}
-	}
-	if clicked(mouse, rl.NewRectangle(1215, 22, 155, 48)) {
-		a.connectPTT()
-	}
-	if clicked(mouse, rl.NewRectangle(1380, 22, 190, 48)) {
-		a.pttSettingsOpen = true
-		a.capturingPTTKey = false
-	}
-	if a.signalEditorOpen {
-		a.updateSignalEditor(mouse)
-		a.processor.Spectrum(a.spectrum, 10000)
-		return
-	}
-	pttRect := pttRectangle()
-	if a.mode == "tx" && a.settings.PTTMode == "hold" {
-		if rl.IsMouseButtonPressed(rl.MouseLeftButton) && rl.CheckCollisionPointRec(mouse, pttRect) {
-			a.mousePTTActive = a.setTX(true)
-		}
-		if a.mousePTTActive && rl.IsMouseButtonReleased(rl.MouseLeftButton) {
-			a.setTX(false)
-			a.mousePTTActive = false
-		}
-	} else if a.mode == "tx" && clicked(mouse, pttRect) {
-		a.toggleTX()
 	}
 	for i := 0; i < 5; i++ {
 		if clicked(mouse, tabRectangle(i)) {
@@ -951,11 +930,10 @@ func (a *app) updateDefaultRXOutput() {
 
 func (a *app) updateDeviceMenu(mouse rl.Vector2) {
 	devices := a.inputs
-	x := float32(30)
-	selector := rl.NewRectangle(30, 92, 710, 64)
+	selector := audioDeviceRect(a.openDeviceMenu)
 	includeWindowsDefault := false
 	if a.openDeviceMenu == 1 {
-		devices, x, selector = a.outputs, 860, rl.NewRectangle(860, 92, 710, 64)
+		devices = a.outputs
 		includeWindowsDefault = a.mode == "rx"
 	}
 	count := len(devices)
@@ -967,7 +945,7 @@ func (a *app) updateDeviceMenu(mouse rl.Vector2) {
 	if wheel := rl.GetMouseWheelMove(); wheel != 0 {
 		a.deviceMenuScroll = max(0, min(maxScroll, a.deviceMenuScroll-int(math.Copysign(1, float64(wheel)))))
 	}
-	list := rl.NewRectangle(x, 160, 710, float32(visible*44+8))
+	list := rl.NewRectangle(selector.X, 160, selector.Width, float32(visible*44+8))
 	if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
 		if rl.CheckCollisionPointRec(mouse, selector) {
 			a.openDeviceMenu = -1
@@ -1722,28 +1700,33 @@ func (a *app) applyDSPAndSave() {
 func (a *app) draw(mouse rl.Vector2) {
 	selectEditorColors(a.mode)
 	status := a.engine.Status()
-	drawHeader(a, status, mouse)
-	inputLabel, outputLabel := "MICROPHONE", "OUTPUT TO RADIO"
+	a.drawNavigation()
+	if a.radio.page != pageAudio {
+		if a.radio.page == pageOperation {
+			a.drawOperation(mouse)
+		} else {
+			a.drawRadioConfig(mouse)
+		}
+		if a.pttSettingsOpen {
+			a.drawPTTSettings(mouse)
+		}
+		return
+	}
+	drawButton(audioProfileRect(0), "TX", a.mode == "tx")
+	drawButton(audioProfileRect(1), "RX", a.mode == "rx")
+	inputLabel, outputLabel := "ENTRADA", "SALIDA A RADIO"
 	if a.mode == "rx" {
-		inputLabel, outputLabel = "INPUT FROM RADIO", "SPEAKERS"
+		inputLabel, outputLabel = "DESDE RADIO", "ALTAVOCES"
 	}
 	outputValue := deviceName(a.outputs, a.outIndex)
 	if a.mode == "rx" && a.settings.RXFollowDefault {
 		outputValue = "WINDOWS → " + outputValue
 	}
-	drawSelector(30, 92, 710, inputLabel, deviceName(a.inputs, a.inIndex), mouse)
-	drawSelector(860, 92, 710, outputLabel, outputValue, mouse)
+	drawSelector(audioDeviceRect(0), inputLabel, deviceName(a.inputs, a.inIndex), mouse)
+	drawSelector(audioDeviceRect(1), outputLabel, outputValue, mouse)
 	a.drawSpectrum(30, 175, 1540, 190)
-	if a.signalEditorOpen {
-		a.drawSignalEditor(mouse)
-		if a.openDeviceMenu >= 0 {
-			a.drawDeviceMenu(mouse)
-		}
-		return
-	}
 	a.drawMeters(status)
 	if a.mode == "tx" {
-		a.drawPTT(mouse)
 		a.drawPersistentTXGain()
 	} else {
 		a.drawRXPanel(status)
@@ -1773,10 +1756,11 @@ func (a *app) draw(mouse rl.Vector2) {
 
 func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 	devices := a.inputs
-	selected, x := a.inIndex, float32(30)
+	selected := a.inIndex
+	selector := audioDeviceRect(a.openDeviceMenu)
 	includeWindowsDefault := false
 	if a.openDeviceMenu == 1 {
-		devices, selected, x = a.outputs, a.outIndex, 860
+		devices, selected = a.outputs, a.outIndex
 		includeWindowsDefault = a.mode == "rx"
 		if includeWindowsDefault {
 			if a.settings.RXFollowDefault {
@@ -1791,12 +1775,12 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 		count++
 	}
 	visible := min(8, count)
-	panel := rl.NewRectangle(x, 160, 710, float32(visible*44+8))
+	panel := rl.NewRectangle(selector.X, 160, selector.Width, float32(visible*44+8))
 	rl.DrawRectangleRounded(panel, .04, 8, rl.NewColor(10, 23, 34, 255))
 	rl.DrawRectangleRoundedLines(panel, .04, 8, color.cyan)
 	for row := 0; row < visible; row++ {
 		index := a.deviceMenuScroll + row
-		item := rl.NewRectangle(x+4, panel.Y+4+float32(row*44), 702, 42)
+		item := rl.NewRectangle(panel.X+4, panel.Y+4+float32(row*44), panel.Width-8, 42)
 		if index == selected {
 			rl.DrawRectangleRounded(item, .08, 5, rl.NewColor(23, 70, 72, 255))
 		} else if rl.CheckCollisionPointRec(mouse, item) {
@@ -1813,64 +1797,17 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 				label += "  ·  CURRENT WINDOWS DEFAULT"
 			}
 		}
-		drawText(ellipsis(label, 58), int32(x+20), int32(item.Y+9), 17, color.text)
+		drawText(ellipsis(label, 58), int32(panel.X+20), int32(item.Y+9), 17, color.text)
 		if index == selected {
-			drawText("✓", int32(x+665), int32(item.Y+8), 18, color.cyan)
+			drawText("✓", int32(panel.X+panel.Width-45), int32(item.Y+8), 18, color.cyan)
 		}
 	}
 	if a.deviceMenuScroll > 0 {
-		drawText("▲", int32(x+675), 165, 14, color.amber)
+		drawText("▲", int32(panel.X+panel.Width-35), 165, 14, color.amber)
 	}
 	if a.deviceMenuScroll+visible < count {
-		drawText("▼", int32(x+675), int32(panel.Y+panel.Height-23), 14, color.amber)
+		drawText("▼", int32(panel.X+panel.Width-35), int32(panel.Y+panel.Height-23), 14, color.amber)
 	}
-}
-
-func drawHeader(a *app, status audioio.Status, mouse rl.Vector2) {
-	drawMilitaryText("IC-RADIO", 38, 18, 42, rl.NewColor(18, 23, 25, 255))
-	drawText("By EA3IWW", 205, 42, 14, rl.NewColor(38, 43, 44, 255))
-	drawButton(onTopButtonRectangle(), "ON TOP", a.settings.AlwaysOnTop)
-	connected := a.ptt.Connected()
-	dot := color.amber
-	state := "PTT NOT CONNECTED"
-	if connected {
-		dot, state = color.green, "RADIO CONNECTED"
-	}
-	drawEngravedPanel(rl.NewRectangle(325, 18, 300, 54))
-	rl.DrawCircle(350, 45, 10, rl.NewColor(dot.R/4, dot.G/4, dot.B/4, 255))
-	rl.DrawCircle(350, 45, 7, dot)
-	rl.DrawRing(rl.NewVector2(350, 45), 8, 10, 0, 360, 24, rl.NewColor(dot.R, dot.G, dot.B, 70))
-	drawText(state, 372, 30, 21, dspColor.amber)
-	drawButton(rl.NewRectangle(650, 22, 100, 48), "RX", a.mode == "rx")
-	drawButton(rl.NewRectangle(760, 22, 100, 48), "TX", a.mode == "tx")
-	drawButton(rl.NewRectangle(870, 22, 40, 48), "CFG", a.signalEditorOpen)
-	portName := "SELECT COM"
-	if len(a.ports) > 0 {
-		portName = a.ports[a.comIndex].Name
-	}
-	portRect := rl.NewRectangle(920, 22, 200, 48)
-	lineRect := rl.NewRectangle(1130, 22, 75, 48)
-	portInteractive := !connected && len(a.ports) > 1
-	lineInteractive := !connected
-	if connected {
-		drawHeaderTelemetry(rl.NewRectangle(920, 18, 285, 54), portName, string(a.line))
-	} else {
-		drawHeaderField(portRect, "PORT", portName, portInteractive, mouse)
-		drawHeaderField(lineRect, "LINE", string(a.line), lineInteractive, mouse)
-	}
-	drawButton(rl.NewRectangle(1215, 22, 155, 48), "CONNECT", connected)
-	drawUtilityButton(rl.NewRectangle(1380, 22, 190, 48), "PTT SETTINGS", mouse)
-	_ = status
-}
-
-func drawHeaderTelemetry(r rl.Rectangle, port, line string) {
-	drawEngravedPanel(r)
-	separator := r.X + 205
-	rl.DrawLineEx(rl.NewVector2(separator, r.Y+8), rl.NewVector2(separator, r.Y+r.Height-8), 1, rl.NewColor(83, 88, 89, 170))
-	drawCentered("PORT", rl.NewRectangle(r.X, r.Y+4, 205, 18), 11, dspColor.muted, 0)
-	drawCentered(ellipsis(port, 18), rl.NewRectangle(r.X, r.Y+20, 205, 27), 18, dspColor.text, 0)
-	drawCentered("LINE", rl.NewRectangle(separator, r.Y+4, r.Width-205, 18), 11, dspColor.muted, 0)
-	drawCentered(line, rl.NewRectangle(separator, r.Y+20, r.Width-205, 27), 18, dspColor.text, 0)
 }
 
 func drawEngravedPanel(r rl.Rectangle) {
@@ -1879,50 +1816,6 @@ func drawEngravedPanel(r rl.Rectangle) {
 	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+2), rl.NewVector2(r.X+r.Width-10, r.Y+2), 2, rl.NewColor(245, 247, 246, 175))
 	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+r.Height-2), rl.NewVector2(r.X+r.Width-10, r.Y+r.Height-2), 2, rl.NewColor(72, 78, 79, 130))
 	rl.DrawRectangleRoundedLines(r, .12, 8, rl.NewColor(103, 108, 109, 185))
-}
-
-func drawUtilityButton(r rl.Rectangle, label string, mouse rl.Vector2) {
-	fill := rl.NewColor(199, 201, 200, 255)
-	border := rl.NewColor(88, 94, 95, 230)
-	if rl.CheckCollisionPointRec(mouse, r) {
-		fill = rl.NewColor(214, 216, 215, 255)
-		border = rl.NewColor(48, 57, 59, 255)
-	}
-	rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+3, r.Width, r.Height), .16, 7, rl.NewColor(20, 24, 25, 85))
-	rl.DrawRectangleRounded(r, .16, 7, fill)
-	rl.DrawRectangleRoundedLines(r, .16, 7, border)
-	drawGearIcon(rl.NewVector2(r.X+25, r.Y+r.Height/2), 10, dspColor.text)
-	drawCentered(label, rl.NewRectangle(r.X+37, r.Y, r.Width-42, r.Height), 17, dspColor.text, 0)
-}
-
-func drawGearIcon(center rl.Vector2, radius float32, c rl.Color) {
-	rl.DrawRing(center, radius*.45, radius*.68, 0, 360, 24, c)
-	for i := 0; i < 8; i++ {
-		angle := float64(i) * math.Pi / 4
-		inner := rl.NewVector2(center.X+float32(math.Cos(angle))*radius*.72, center.Y+float32(math.Sin(angle))*radius*.72)
-		outer := rl.NewVector2(center.X+float32(math.Cos(angle))*radius, center.Y+float32(math.Sin(angle))*radius)
-		rl.DrawLineEx(inner, outer, 3, c)
-	}
-}
-
-func drawHeaderField(r rl.Rectangle, label, value string, interactive bool, mouse rl.Vector2) {
-	if interactive {
-		drawButton(r, value, false)
-		drawText(label, int32(r.X+8), int32(r.Y+5), 9, color.muted)
-		// A native chevron communicates selection without relying on a font glyph.
-		x, y := r.X+r.Width-15, r.Y+r.Height/2+2
-		rl.DrawLineEx(rl.NewVector2(x-5, y-3), rl.NewVector2(x, y+2), 2, color.amber)
-		rl.DrawLineEx(rl.NewVector2(x, y+2), rl.NewVector2(x+5, y-3), 2, color.amber)
-		if rl.CheckCollisionPointRec(mouse, r) {
-			rl.DrawRectangleRoundedLines(r, .2, 8, color.amber)
-		}
-		return
-	}
-	// Read-only values are engraved into the fascia: no hover response, glow,
-	// button shadow or other affordance suggesting they can be pressed.
-	drawEngravedPanel(r)
-	drawCentered(label, rl.NewRectangle(r.X, r.Y+3, r.Width, 16), 10, dspColor.muted, 0)
-	drawCentered(value, rl.NewRectangle(r.X+6, r.Y+18, r.Width-12, 25), 16, dspColor.text, 0)
 }
 
 func (a *app) drawRXPanel(status audioio.Status) {
@@ -1940,22 +1833,16 @@ func (a *app) drawRXPanel(status audioio.Status) {
 	drawCentered(fmt.Sprintf("48 kHz · %.0f %% CPU", status.CPULoad), r, 16, color.muted, 70)
 }
 
-func drawSelector(x, y, w float32, label, value string, mouse rl.Vector2) {
-	r := rl.NewRectangle(x, y, w, 64)
-	labelWidth := float32(245)
-	if strings.Contains(label, "INPUT FROM") || strings.Contains(label, "OUTPUT TO RADIO") {
-		labelWidth = 285
-	}
-	// The label belongs to the metal faceplate; only the selected device sits in
-	// the dark glass display, as it would on physical rack hardware.
-	drawText(label, int32(x+18), int32(y+18), 23, rl.NewColor(27, 31, 32, 255))
-	field := rl.NewRectangle(x+labelWidth, y+5, w-labelWidth-8, 54)
+func drawSelector(r rl.Rectangle, label, value string, mouse rl.Vector2) {
+	const labelWidth = 167
+	drawText(label, int32(r.X+10), int32(r.Y+21), 17, color.text)
+	field := rl.NewRectangle(r.X+labelWidth, r.Y+5, r.Width-labelWidth, 54)
 	drawDarkDisplay(field)
 	if rl.CheckCollisionPointRec(mouse, r) {
-		rl.DrawRectangleRoundedLines(rl.NewRectangle(field.X-2, field.Y-2, field.Width+4, field.Height+4), .18, 8, rl.NewColor(126, 224, 230, 175))
+		rl.DrawRectangleRoundedLines(field, .18, 8, color.cyan)
 	}
-	drawText(ellipsis(value, 34), int32(field.X+22), int32(field.Y+13), 23, color.text)
-	drawText("⌄", int32(field.X+field.Width-42), int32(field.Y+10), 28, color.text)
+	drawCenteredFitted(ellipsis(value, 42), rl.NewRectangle(field.X+10, field.Y, field.Width-44, field.Height), 21, color.text)
+	drawText("▼", int32(field.X+field.Width-27), int32(field.Y+17), 17, color.text)
 }
 
 func (a *app) drawSpectrum(x, y, w, h float32) {
@@ -2210,52 +2097,14 @@ func meterGradient(position float32) rl.Color {
 	return stops[len(stops)-1].color
 }
 
-func (a *app) drawPTT(mouse rl.Vector2) {
-	r := pttRectangle()
-	tx := a.ptt.TX()
-	fill := rl.NewColor(25, 47, 62, 255)
-	outline := color.cyan
-	if tx {
-		fill, outline = rl.NewColor(173, 5, 18, 255), color.red
-	}
-	if rl.CheckCollisionPointRec(mouse, r) {
-		fill = mix(fill, rl.White, .08)
-	}
-	if tx {
-		for i := 9; i >= 1; i-- {
-			expand := float32(i * 4)
-			glow := rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2)
-			rl.DrawRectangleRounded(glow, .25, 16, rl.NewColor(235, 25, 39, uint8(5+i*2)))
-		}
-	}
-	rl.DrawRectangleRounded(r, .25, 16, fill)
-	for i := 0; i < 4; i++ {
-		rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X-float32(i), r.Y-float32(i), r.Width+2*float32(i), r.Height+2*float32(i)), .25, 16, rl.NewColor(outline.R, outline.G, outline.B, uint8(255-i*45)))
-	}
-	mainText, sub := "PTT", "PRESS TO TRANSMIT"
-	if tx {
-		mainText, sub = "TX", "PRESS TO RETURN TO RX"
-	}
-	drawMilitaryCentered(mainText, r, 70, color.text, -27)
-	drawCentered(sub, r, 20, color.text, 25)
-	if tx {
-		drawCentered(time.Since(a.txSince).Truncate(time.Second).String(), r, 20, color.text, 51)
-	} else {
-		mode := "HOLD"
-		if a.settings.PTTMode == "lock" {
-			mode = "PTT LOCK"
-		}
-		drawCentered(a.radioStateLabel()+" · "+mode+" · "+ellipsis(a.shortcutLabel(), 18), r, 15, color.muted, 51)
-	}
-}
-
 func (a *app) drawPersistentTXGain() {
 	r := txGainPanelRectangle()
-	percent := (a.config.OutputGainDB + 12) / 24 * 100
-	drawRecessedControlWell(r, false)
-	drawText("TX GAIN", int32(r.X+18), int32(r.Y+15), 17, dspColor.text)
-	drawMechanicalSlider(txGainTrackRectangle(), percent, controlColor.active)
-	drawText(fmt.Sprintf("%+.1f dB", a.config.OutputGainDB), int32(r.X+r.Width-88), int32(r.Y+14), 18, dspColor.amber)
+	drawInsetPanel(r, .08)
+	rl.DrawRectangleRoundedLines(r, .08, 8, color.cyan)
+	drawText("GANANCIA TX", int32(r.X+24), int32(r.Y+23), 22, color.text)
+	value := rl.NewRectangle(r.X+r.Width-150, r.Y+16, 125, 40)
+	drawControlValue(value, fmt.Sprintf("%+.1f dB", a.config.OutputGainDB))
+	drawMechanicalSlider(txGainTrackRectangle(), (a.config.OutputGainDB+12)/24*100, controlColor.active)
 }
 
 func (a *app) radioStateLabel() string {
@@ -2875,7 +2724,7 @@ func latinCodepoints() []rune {
 	for value := rune(32); value <= 255; value++ {
 		result = append(result, value)
 	}
-	return append(result, '…', '⌄', '·', '✓', '▲', '▼')
+	return append(result, '…', '⌄', '·', '✓', '▲', '▼', '—', '–', '±', '▾', '→')
 }
 
 func clicked(mouse rl.Vector2, r rl.Rectangle) bool {
@@ -3028,20 +2877,12 @@ func eqGraphRectangle() rl.Rectangle {
 	return rl.NewRectangle(100, 710, 1450, 90)
 }
 
-func pttRectangle() rl.Rectangle {
-	return rl.NewRectangle(530, 385, 540, 130)
-}
-
 func txGainPanelRectangle() rl.Rectangle {
-	return rl.NewRectangle(530, 523, 540, 54)
+	return rl.NewRectangle(508, 385, 584, 185)
 }
 
 func txGainTrackRectangle() rl.Rectangle {
-	return rl.NewRectangle(685, 546, 275, 10)
-}
-
-func onTopButtonRectangle() rl.Rectangle {
-	return rl.NewRectangle(38, 62, 140, 26)
+	return rl.NewRectangle(555, 485, 490, 10)
 }
 
 func txFilterToggleRectangle() rl.Rectangle {
@@ -3132,30 +2973,18 @@ func formatEQFrequency(hz float64) string {
 	return fmt.Sprintf("%.1fk", hz/1000)
 }
 
-func drawRackChassis() {
-	rl.DrawRectangleGradientV(0, 0, viewW, viewH, rl.NewColor(211, 214, 214, 255), rl.NewColor(137, 142, 144, 255))
-	for y := int32(1); y < viewH; y += 3 {
+func drawConsoleChassis() {
+	rl.DrawRectangleGradientV(0, 0, viewW, viewH, rl.NewColor(27, 42, 50, 255), rl.NewColor(9, 19, 25, 255))
+	rl.DrawRectangleGradientV(0, 0, viewW, 70, rl.NewColor(211, 214, 214, 255), rl.NewColor(137, 142, 144, 255))
+	for y := int32(1); y < 70; y += 3 {
 		shade := uint8(18 + (y%11)*2)
 		rl.DrawLine(0, y, viewW, y, rl.NewColor(255, 255, 255, shade))
 	}
-	for y := int32(2); y < viewH; y += 7 {
+	for y := int32(2); y < 70; y += 7 {
 		rl.DrawLine(0, y, viewW, y, rl.NewColor(45, 49, 50, 18))
 	}
-	rl.DrawRectangleGradientH(0, 0, 24, viewH, rl.NewColor(92, 97, 99, 255), rl.NewColor(182, 186, 186, 255))
-	rl.DrawRectangleGradientH(viewW-24, 0, 24, viewH, rl.NewColor(182, 186, 186, 255), rl.NewColor(89, 94, 96, 255))
-	rl.DrawRectangleLinesEx(rl.NewRectangle(3, 3, viewW-6, viewH-6), 3, rl.NewColor(68, 73, 75, 255))
-	rl.DrawLine(24, 0, 24, viewH, rl.NewColor(65, 70, 72, 190))
-	rl.DrawLine(viewW-25, 0, viewW-25, viewH, rl.NewColor(238, 240, 240, 170))
-	for _, p := range []rl.Vector2{{X: 14, Y: 42}, {X: viewW - 14, Y: 42}, {X: 14, Y: viewH - 42}, {X: viewW - 14, Y: viewH - 42}} {
-		drawRackScrew(p.X, p.Y)
-	}
-}
-
-func drawRackScrew(x, y float32) {
-	rl.DrawCircle(int32(x+2), int32(y+3), 13, rl.NewColor(45, 47, 47, 110))
-	rl.DrawCircleGradient(rl.NewVector2(x, y), 12, rl.NewColor(74, 78, 79, 255), rl.NewColor(8, 10, 11, 255))
-	rl.DrawCircleLines(int32(x), int32(y), 12, rl.NewColor(212, 215, 214, 180))
-	rl.DrawLineEx(rl.NewVector2(x-6, y-6), rl.NewVector2(x+6, y+6), 3, rl.NewColor(5, 6, 7, 255))
+	rl.DrawRectangleLinesEx(rl.NewRectangle(1, 1, viewW-2, viewH-2), 2, rl.NewColor(74, 104, 116, 255))
+	rl.DrawLine(0, 70, viewW, 70, rl.NewColor(83, 155, 172, 255))
 }
 
 func drawDarkDisplay(r rl.Rectangle) {
@@ -3178,9 +3007,9 @@ func drawMetalControlPanel(r rl.Rectangle) {
 	// Scissor rectangles use physical screen coordinates and therefore do not
 	// follow the virtual 1600x900 camera when the window is resized. Drawing the
 	// panel directly keeps its bounds stable at every window scale.
-	rl.DrawRectangleRounded(r, .04, 8, rl.NewColor(205, 208, 207, 255))
+	rl.DrawRectangleRounded(r, .04, 8, rl.NewColor(20, 34, 43, 255))
 	for y := int32(r.Y) + 2; y < int32(r.Y+r.Height); y += 3 {
-		rl.DrawLine(int32(r.X+2), y, int32(r.X+r.Width-2), y, rl.NewColor(255, 255, 255, 25))
+		rl.DrawLine(int32(r.X+2), y, int32(r.X+r.Width-2), y, rl.NewColor(255, 255, 255, 5))
 	}
 	for y := int32(r.Y) + 4; y < int32(r.Y+r.Height); y += 8 {
 		rl.DrawLine(int32(r.X+2), y, int32(r.X+r.Width-2), y, rl.NewColor(40, 44, 45, 13))
