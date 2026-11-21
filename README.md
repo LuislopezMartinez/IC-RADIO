@@ -87,6 +87,17 @@ Open **CFG** to select the radio's USB COM port and the RTS or DTR line used for
 
 **Audio** selects the existing TX and RX processing profiles. **CFG** also contains PTT settings and the Sonic Sequencer.
 
+In **Operación**, use **RF POWER** to adjust the radio's output setting over CI-V. **TUNER** toggles the internal tuner and **TUNE** starts a tuning cycle. In **CFG**, **VFO INICIAL** lets you choose A, B, or manual selection when connecting.
+
+### SWR measurements
+
+Open **TEST** in the spectrum controls to see the SWR graph and select the frequency step and number of points. Center the radio on the frequency you want to measure. The sweep requires the IC-7300 in receive, USB or LSB with USB modulation, and **USB Audio CODEC** as the Audio TX output. The sweep transmits a test tone. Use a suitable antenna or dummy load and check that the sweep frequencies are clear and allowed before pressing **INICIAR**. Press **DETENER** or Escape to cancel.
+
+Completed sweeps are saved per band. Use **SWR** to overlay the saved sweep on the RF spectrum.
+
+![IC-RADIO SWR graph with simulated data](assets/screenshots/ic-radio-swr.png)
+
+
 ## PTT safety
 
 IC-RADIO clears RTS and DTR when opening and closing the serial port. Escape

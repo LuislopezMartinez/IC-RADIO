@@ -41,3 +41,10 @@ func TestRFVerticalZoomAnchorsNoiseFloor(t *testing.T) {
 		t.Fatal("reset did not restore the original scale")
 	}
 }
+
+func TestRFWaterfallUsesSpectrumFrequencyAxis(t *testing.T) {
+	graph, waterfall := rfGraph(), rfWaterfall()
+	if waterfall.X != graph.X || waterfall.Width != graph.Width {
+		t.Fatal("waterfall and spectrum have different horizontal frequency scales")
+	}
+}

@@ -2,15 +2,13 @@ package main
 
 import (
 	"fmt"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/ptt"
+	rl "github.com/gen2brain/raylib-go/raylib"
 	"math"
 	"strconv"
 	"strings"
 	"time"
-
-	audio "github.com/LuislopezMartinez/IC-DSP/audio-processing-core"
-	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
-	"github.com/LuislopezMartinez/IC-RADIO/internal/ptt"
-	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
 type radioPage int
@@ -31,6 +29,9 @@ var radioMeters = [...]struct {
 }{{"S / Po", 0}, {"S", 2}, {"Po", 0x11}, {"SWR", 0x12}, {"ALC", 0x13}, {"COMP", 0x14}, {"Vd", 0x15}, {"Id", 0x16}}
 
 type radioPanel struct {
+	initialVFOPending                 bool
+	output                            outputControls
+	swr                               swrPanel
 	bands                             bandSelector
 	page                              radioPage
 	session                           *civ.Session
@@ -62,6 +63,7 @@ func (r *radioPanel) cancelInput() {
 	r.cancelled = r.editing
 	r.editing, r.modeMenu = false, false
 	r.bands = bandSelector{}
+	r.output.dragging = false
 }
 
 func (r *radioPanel) snapshot() (civ.State, bool) {
@@ -90,12 +92,14 @@ func stepRect() rl.Rectangle      { return rl.NewRectangle(385, 148, 125, 35) }
 func modeOption(index int) rl.Rectangle {
 	return rl.NewRectangle(44+float32(index%3)*108, 187+float32(index/3)*42, 101, 37)
 }
-func spanRect() rl.Rectangle         { return rl.NewRectangle(1390, 240, 189, 36) }
-func peakRect() rl.Rectangle         { return rl.NewRectangle(1280, 240, 88, 36) }
-func rfGraph() rl.Rectangle          { return rl.NewRectangle(99, 295, 1480, 226) }
-func rfWaterfall() rl.Rectangle      { return rl.NewRectangle(18, 574, 1564, 173) }
+func spanRect() rl.Rectangle { return rl.NewRectangle(1390, 240, 189, 36) }
+func peakRect() rl.Rectangle { return rl.NewRectangle(1280, 240, 88, 36) }
+func rfGraph() rl.Rectangle  { return rl.NewRectangle(99, 295, 1480, 226) }
+func rfWaterfall() rl.Rectangle {
+	graph := rfGraph()
+	return rl.NewRectangle(graph.X, 574, graph.Width, 173)
+}
 func operationPTT() rl.Rectangle     { return rl.NewRectangle(30, 790, 505, 86) }
-func operationGain() rl.Rectangle    { return rl.NewRectangle(904, 825, 299, 11) }
 func operationMonitor() rl.Rectangle { return rl.NewRectangle(1256, 807, 121, 48) }
 func operationReset() rl.Rectangle   { return rl.NewRectangle(1395, 807, 175, 48) }
 func meterRect() rl.Rectangle        { return rl.NewRectangle(1033, 98, 536, 102) }
@@ -187,8 +191,26 @@ func (a *app) disconnectRadio() {
 	a.signalEnding = false
 	a.keyPTTActive, a.mousePTTActive = false, false
 	a.radio.session = nil
+	a.radio.initialVFOPending = false
 	a.radio.cancelInput()
 	a.message = "Puerto desconectado"
+}
+
+func (a *app) applyInitialVFO() {
+	if !a.radio.initialVFOPending || a.ptt.TX() {
+		return
+	}
+	state, online := a.radio.snapshot()
+	if !online || !state.TXKnown || state.TX || state.Tuner == 2 {
+		return
+	}
+	vfo := byte(0)
+	if a.settings.InitialVFO == "B" {
+		vfo = 1
+	}
+	if a.radio.session.SelectVFO(vfo) {
+		a.radio.initialVFOPending = false
+	}
 }
 
 func (a *app) civAddress() byte {
@@ -249,6 +271,17 @@ func (a *app) updateRadioConfig(mouse rl.Vector2) {
 		if clicked(mouse, configControl(50, 183)) {
 			r.editing, r.input = true, fmt.Sprintf("%02X", a.civAddress())
 		}
+		if clicked(mouse, configControl(490, 183)) {
+			switch a.settings.InitialVFO {
+			case "A":
+				a.settings.InitialVFO = "B"
+			case "B":
+				a.settings.InitialVFO = ""
+			default:
+				a.settings.InitialVFO = "A"
+			}
+			a.save()
+		}
 		if clicked(mouse, configControl(270, 183)) {
 			a.settings.DisableCIV = !a.settings.DisableCIV
 			a.save()
@@ -289,6 +322,11 @@ func (a *app) drawRadioConfig(mouse rl.Vector2) {
 	}
 	drawButton(configControl(50, 183), "CI-V  "+address+"h", a.radio.editing)
 	drawButton(configControl(270, 183), "CI-V USB", !a.settings.DisableCIV)
+	initialVFO := a.settings.InitialVFO
+	if initialVFO != "A" && initialVFO != "B" {
+		initialVFO = "MANUAL"
+	}
+	drawButton(configControl(490, 183), "VFO INICIAL  "+initialVFO, initialVFO != "MANUAL")
 	port := "SIN PUERTOS"
 	if len(a.ports) > 0 {
 		port = a.ports[a.comIndex].Name
@@ -304,7 +342,7 @@ func (a *app) drawRadioConfig(mouse rl.Vector2) {
 	drawButton(configControl(930, 270), "AJUSTES PTT", false)
 	drawButton(configControl(1150, 270), "SIEMPRE VISIBLE", a.settings.AlwaysOnTop)
 	drawButton(configControl(50, 337), "SONIC SEQUENCER", a.signalEditorOpen)
-	drawText(a.message, 505, 200, 19, color.muted)
+	drawText(ellipsis(a.message, 78), 720, 198, 17, color.muted)
 	if a.signalEditorOpen {
 		a.drawSignalEditor(mouse)
 	}
@@ -320,30 +358,6 @@ func (r *radioPanel) collectInput(allowed string, limit int) {
 	if rl.IsKeyPressed(rl.KeyBackspace) && len(r.input) > 0 {
 		r.input = r.input[:len(r.input)-1]
 	}
-}
-
-func (a *app) txGain() float64 {
-	if a.mode == "tx" {
-		return a.config.OutputGainDB
-	}
-	return a.txView.config.OutputGainDB
-}
-
-func (a *app) setOperationGain(gain float64) {
-	if a.mode == "tx" {
-		a.config.OutputGainDB = gain
-		a.settings.GainEnabled = true
-		a.applyDSPAndSave()
-		return
-	}
-	a.txView.config.OutputGainDB, a.txView.gainEnabled = gain, true
-	effective := a.txView.config
-	if !a.txView.filtersEnabled {
-		effective.LowCutHz, effective.HighCutHz = 20, audio.DefaultSampleRate*.45
-	}
-	effective.TXPresenceDB = min(effective.TXPresenceDB, max(0, 18-gain))
-	a.txView.processor.Configure(effective)
-	a.save()
 }
 
 func (a *app) updateOperation(mouse rl.Vector2) {
@@ -397,16 +411,7 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 	} else if clicked(mouse, operationPTT()) {
 		a.toggleTX()
 	}
-	track := operationGain()
-	if clicked(mouse, expandedSliderHitbox(track)) {
-		a.txGainDrag = true
-	}
-	if a.txGainDrag && rl.IsMouseButtonDown(rl.MouseLeftButton) {
-		gain := math.Round((sliderPercent(mouse.X, track)*24-12)*2) / 2
-		if gain != a.txGain() {
-			a.setOperationGain(gain)
-		}
-	}
+	a.updateOutputControls(mouse, state, online)
 	if clicked(mouse, operationMonitor()) {
 		a.toggleOutputMonitor()
 	}
@@ -569,6 +574,9 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 		rl.DrawTriangle(rl.NewVector2(255, 139), rl.NewVector2(261, 148), rl.NewVector2(267, 139), color.amber)
 	}
 	drawText("VFO", 324, 111, 17, color.muted)
+	if online && !state.VFOKnown {
+		drawText("?", 358, 110, 17, color.amber)
+	}
 	drawVFOButtons(state, online)
 	if online && state.Filter > 0 {
 		drawText(fmt.Sprintf("FIL%d", state.Filter), 155, 183, 15, color.muted)
@@ -596,16 +604,13 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 	a.drawRF(state, peaks, online)
 	a.drawBandButton(state, online)
 	a.drawBandPanel(state)
+	r.swr.draw(state.Frequency)
 	drawConsolePanel(rl.NewRectangle(7, 770, 1586, 123), consoleEdge)
 	a.drawConsolePTT(mouse)
-	drawText("GANANCIA TX", 564, 814, 23, color.text)
-	gain := rl.NewRectangle(765, 809, 123, 43)
-	drawConsolePanel(gain, consoleEdge)
-	drawConsoleText(semiboldFont, fmt.Sprintf("%+.1f dB", a.txGain()), gain, 23, color.text)
 	for _, x := range []int32{551, 1228} {
 		rl.DrawLine(x, 789, x, 875, consoleEdge)
 	}
-	drawMechanicalSlider(operationGain(), (a.txGain()+12)/24*100, color.amber)
+	a.drawOutputControls(state, online)
 	drawMonitorButton(operationMonitor(), a.settings.MonitorEnabled)
 	drawConsoleButton(operationReset(), "RESET SAFE", a.txSignal.safetyActive.Load(), false)
 	if msg := a.message; msg != "" {
@@ -684,6 +689,7 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 	r := &a.radio
 	drawConsolePanel(rl.NewRectangle(7, 225, 1586, 533), consoleEdge)
 	drawText("ESPECTRO RF", 28, 241, 29, color.text)
+	r.swr.drawButtons()
 	drawConsoleButton(peakRect(), "PEAK", r.showPeak, false)
 	drawRXButtons(state, online)
 	r.zoom.draw()
@@ -755,9 +761,9 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 		drawConsoleText(semiboldFont, "FUERA DE EJE", alert, 14, color.amber)
 	}
 	r.updateWaterfall(sweep)
-	rl.DrawLine(18, 574, 1582, 574, consoleEdge)
+	rl.DrawLine(int32(waterfall.X), int32(waterfall.Y), int32(waterfall.X+waterfall.Width), int32(waterfall.Y), consoleEdge)
 	if r.texture.ID != 0 {
-		rl.DrawTexturePro(r.texture, rl.NewRectangle(0, 0, civ.Samples, waterfallRows), waterfall, rl.Vector2{}, 0, rl.White)
+		rl.DrawTexturePro(r.texture, rl.NewRectangle(.5, 0, civ.Samples-1, waterfallRows), waterfall, rl.Vector2{}, 0, rl.White)
 	}
 	hz, exact := displayedFrequency(state, online, time.Now())
 	if hz > 0 && hz >= sweep.Low && hz <= sweep.High {
@@ -770,6 +776,7 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 		rl.DrawRectangleRec(rl.NewRectangle(max(graph.X-20, min(graph.X+graph.Width-64, x-42)), 531, 84, 32), rl.NewColor(6, 19, 26, 255))
 		drawConsoleText(semiboldFont, fmt.Sprintf("%.3f", float64(hz)/1e6), rl.NewRectangle(max(graph.X-20, min(graph.X+graph.Width-64, x-42)), 531, 84, 32), 22, shade)
 	}
+	r.swr.overlay(graph, sweep)
 }
 
 func displayedFrequency(state civ.State, online bool, now time.Time) (hz int64, exact bool) {

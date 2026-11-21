@@ -167,3 +167,35 @@ func TestConfirmedVFOFeedback(t *testing.T) {
 		t.Fatalf("unexpected VFO feedback: known=%v VFO=%d equalized=%v", got.VFOKnown, got.VFO, got.VFOEqualizedAt)
 	}
 }
+
+func TestSWRPowerControl(t *testing.T) {
+	s := &Session{address: 0x94, requests: make(chan []byte, 1)}
+	if !s.SetPower(77) || !bytes.Equal(<-s.requests, []byte{0x14, 0x0a, 0, 0x77}) {
+		t.Fatal("wrong power command")
+	}
+	var scope assembler
+	now := time.Now()
+	s.receive([]byte{0xe0, 0x94, 0x14, 0x0a, 0, 0x77}, &scope, now)
+	s.receive([]byte{0xe0, 0x94, 0x0f, 1}, &scope, now)
+	if got := s.Snapshot(); got.PowerSetting != 77 || got.PowerAt != now || !got.Split {
+		t.Fatal("wrong power or split feedback")
+	}
+}
+
+func TestTunerStateAndCommand(t *testing.T) {
+	s := &Session{address: 0x94, requests: make(chan []byte, 1)}
+	if !s.SetTuner(2) || !bytes.Equal(<-s.requests, []byte{0x1c, 1, 2}) {
+		t.Fatal("wrong tuner start command")
+	}
+	if !bytes.Equal(commandReadback([]byte{0x1c, 1, 2}), []byte{0x1c, 1}) {
+		t.Fatal("tuner command must confirm state")
+	}
+	var scope assembler
+	now := time.Now()
+	s.receive([]byte{0xe0, 0x94, 0x1c, 0, 0}, &scope, now)
+	s.receive([]byte{0xe0, 0x94, 0x1c, 1, 2}, &scope, now)
+	got := s.Snapshot()
+	if got.Tuner != 2 || got.TunerAt != now || got.TX || !got.TXKnown {
+		t.Fatal("tuner status corrupted the transmit state")
+	}
+}

@@ -82,6 +82,8 @@ func selectEditorColors(mode string) {
 var regularFont, semiboldFont, militaryFont, displayFont rl.Font
 
 type testToneProcessor struct {
+	swrRunning       atomic.Bool
+	swrToneUntil     atomic.Int64
 	base             *audio.Processor
 	monitor          sampleMonitor
 	enabled          atomic.Bool
@@ -103,6 +105,20 @@ type sampleMonitor interface {
 }
 
 func (p *testToneProcessor) Process(samples []float32) {
+	if p.swrRunning.Load() {
+		clear(samples)
+		if time.Now().UnixNano() < p.swrToneUntil.Load() {
+			const step = 2 * math.Pi * swrToneHz / audio.DefaultSampleRate
+			for i := range samples {
+				samples[i] = float32(.15 * math.Sin(p.phase))
+				p.phase += step
+				if p.phase >= 2*math.Pi {
+					p.phase -= 2 * math.Pi
+				}
+			}
+		}
+		return
+	}
 	signaling := p.sequencer != nil && p.sequencer.Render(samples)
 	if !signaling && p.enabled.Load() {
 		frequency := max(int64(0), min(int64(5000), p.frequencyHz.Load()))
@@ -213,40 +229,43 @@ func (p *testToneProcessor) resetSafety() {
 }
 
 type settings struct {
-	CIVAddress      string            `json:"civ_address"`
-	DisableCIV      bool              `json:"disable_civ"`
-	Version         int               `json:"version"`
-	Input           string            `json:"input"`
-	Output          string            `json:"output"`
-	COM             string            `json:"com"`
-	PTTLine         ptt.Line          `json:"ptt_line"`
-	Config          audio.Config      `json:"dsp"`
-	FiltersEnabled  bool              `json:"filters_enabled"`
-	GainEnabled     bool              `json:"gain_enabled"`
-	PTTMode         string            `json:"ptt_mode"`
-	PTTKey          int32             `json:"ptt_key"`
-	PTTCtrl         bool              `json:"ptt_ctrl"`
-	PTTAlt          bool              `json:"ptt_alt"`
-	PTTShift        bool              `json:"ptt_shift"`
-	RXInput         string            `json:"rx_input"`
-	RXOutput        string            `json:"rx_output"`
-	RXFollowDefault bool              `json:"rx_follow_default_output"`
-	RXConfig        audio.Config      `json:"rx_dsp"`
-	RXFilters       bool              `json:"rx_filters_enabled"`
-	RXGain          bool              `json:"rx_gain_enabled"`
-	RXEmphasis      bool              `json:"rx_emphasis_enabled"`
-	RXEmphasisMode  string            `json:"rx_emphasis_mode"`
-	RXEmphasisMix   float64           `json:"rx_emphasis_amount"`
-	RXWDSP          wdsp.Config       `json:"rx_wdsp"`
-	TXActiveTab     int               `json:"tx_active_tab"`
-	RXActiveTab     int               `json:"rx_active_tab"`
-	MonitorEnabled  bool              `json:"tx_monitor_enabled"`
-	AlwaysOnTop     bool              `json:"always_on_top"`
-	TestToneHz      float64           `json:"test_tone_hz"`
-	TXFadeEnabled   bool              `json:"tx_fade_enabled"`
-	TXFadeMS        float64           `json:"tx_fade_ms"`
-	GlobalPresets   [3]globalPreset   `json:"global_presets"`
-	Signaling       signalingSettings `json:"signaling"`
+	InitialVFO      string                 `json:"initial_vfo,omitempty"`
+	SWRHistory      map[byte]swrSavedSweep `json:"swr_history,omitempty"`
+	SWROverlay      bool                   `json:"swr_overlay,omitempty"`
+	CIVAddress      string                 `json:"civ_address"`
+	DisableCIV      bool                   `json:"disable_civ"`
+	Version         int                    `json:"version"`
+	Input           string                 `json:"input"`
+	Output          string                 `json:"output"`
+	COM             string                 `json:"com"`
+	PTTLine         ptt.Line               `json:"ptt_line"`
+	Config          audio.Config           `json:"dsp"`
+	FiltersEnabled  bool                   `json:"filters_enabled"`
+	GainEnabled     bool                   `json:"gain_enabled"`
+	PTTMode         string                 `json:"ptt_mode"`
+	PTTKey          int32                  `json:"ptt_key"`
+	PTTCtrl         bool                   `json:"ptt_ctrl"`
+	PTTAlt          bool                   `json:"ptt_alt"`
+	PTTShift        bool                   `json:"ptt_shift"`
+	RXInput         string                 `json:"rx_input"`
+	RXOutput        string                 `json:"rx_output"`
+	RXFollowDefault bool                   `json:"rx_follow_default_output"`
+	RXConfig        audio.Config           `json:"rx_dsp"`
+	RXFilters       bool                   `json:"rx_filters_enabled"`
+	RXGain          bool                   `json:"rx_gain_enabled"`
+	RXEmphasis      bool                   `json:"rx_emphasis_enabled"`
+	RXEmphasisMode  string                 `json:"rx_emphasis_mode"`
+	RXEmphasisMix   float64                `json:"rx_emphasis_amount"`
+	RXWDSP          wdsp.Config            `json:"rx_wdsp"`
+	TXActiveTab     int                    `json:"tx_active_tab"`
+	RXActiveTab     int                    `json:"rx_active_tab"`
+	MonitorEnabled  bool                   `json:"tx_monitor_enabled"`
+	AlwaysOnTop     bool                   `json:"always_on_top"`
+	TestToneHz      float64                `json:"test_tone_hz"`
+	TXFadeEnabled   bool                   `json:"tx_fade_enabled"`
+	TXFadeMS        float64                `json:"tx_fade_ms"`
+	GlobalPresets   [3]globalPreset        `json:"global_presets"`
+	Signaling       signalingSettings      `json:"signaling"`
 }
 
 type globalPreset struct {
@@ -353,6 +372,8 @@ func main() {
 	}
 	a := &app{processor: p, engine: e, config: audio.DefaultConfig(), spectrum: make([]float32, 257), dragEQ: -1, cutoffDrag: -1, controlDrag: -1, notchDrag: -1, echoDrag: -1, presetOverwrite: -1, openDeviceMenu: -1, line: ptt.RTS, mode: "tx", radioState: stateTXReady, txSignal: txSignal, monitor: monitor, signalSequencer: signalSequencer, signalSelected: -1, signalDrag: -1, signalPianoBase: 48}
 	defer func() {
+		a.radio.swr.close()
+		a.consumeSWRReports()
 		_ = a.ptt.SetTX(false)
 		a.ptt.Close()
 		if a.txView.engine != nil {
@@ -371,6 +392,8 @@ func main() {
 		}
 	}()
 	a.load()
+	a.radio.swr.history = a.settings.SWRHistory
+	a.radio.swr.show = a.settings.SWROverlay
 	a.signalSequencer.SetCueVolume(a.settings.Signaling.RXCueVolume)
 	a.txSignal.frequencyHz.Store(int64(math.Round(a.settings.TestToneHz)))
 	a.refreshDevices()
@@ -649,6 +672,7 @@ func (a *app) connectPTT() {
 			return
 		}
 		a.radio.session = session
+		a.radio.initialVFOPending = a.settings.InitialVFO == "A" || a.settings.InitialVFO == "B"
 	}
 	a.message = "PTT connected on " + a.settings.COM + " · " + string(a.line)
 	a.save()
@@ -663,6 +687,15 @@ func (a *app) setTX(enabled bool) bool {
 		a.message = "Connect the PTT control first"
 		a.radioState = stateError
 		return false
+	}
+	if enabled && a.radio.session != nil {
+		state, online := a.radio.snapshot()
+		pendingTune := !a.radio.output.tunerRequested.IsZero() &&
+			a.radio.output.tunerTarget == 2 && time.Since(a.radio.output.tunerRequested) < 2*time.Second
+		if pendingTune || online && state.Tuner == 2 {
+			a.message = "El acoplador esta ajustando"
+			return false
+		}
 	}
 	startedFromRX := enabled && a.mode == "rx"
 	if startedFromRX {
@@ -734,6 +767,10 @@ func (a *app) setTX(enabled bool) bool {
 }
 
 func (a *app) update(mouse rl.Vector2) {
+	if a.updateSWR(mouse) {
+		return
+	}
+	a.applyInitialVFO()
 	if a.signalSequencer != nil && a.signalSequencer.Done() {
 		if a.signalEnding {
 			a.setTX(false)

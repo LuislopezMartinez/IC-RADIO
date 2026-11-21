@@ -25,6 +25,11 @@ type Sweep struct {
 }
 
 type State struct {
+	Tuner                  byte
+	TunerAt                time.Time
+	PowerSetting           int
+	PowerAt, SplitAt, TXAt time.Time
+	Split                  bool
 	VFO                    byte
 	VFOKnown               bool
 	VFOEqualizedAt         time.Time
@@ -77,6 +82,7 @@ type Session struct {
 	stop, done chan struct{}
 	requests   chan []byte
 	meter      atomic.Uint32
+	swrMeter   atomic.Bool
 	mu         sync.RWMutex
 	state      State
 	peaks      [Samples]byte
@@ -162,6 +168,22 @@ func (s *Session) SelectVFO(vfo byte) bool {
 
 func (s *Session) EqualizeVFO() bool { return s.command(0x07, 0xa0) }
 
+func (s *Session) ReadPower() bool { return s.command(0x14, 0x0a) }
+func (s *Session) SetTuner(value byte) bool {
+	return value <= 2 && s.command(0x1c, 1, value)
+}
+
+func (s *Session) ReadSplit() bool { return s.command(0x0f) }
+
+func (s *Session) SetPower(level int) bool {
+	if level < 0 || level > 255 {
+		return false
+	}
+	return s.command(0x14, 0x0a, byte(level/100), byte((level/10%10)<<4|level%10))
+}
+
+func (s *Session) MeasureSWR(active bool) { s.swrMeter.Store(active) }
+
 func (s *Session) SetMode(mode byte) bool { return s.command(0x06, mode) }
 
 func (s *Session) write(port Port, data ...byte) bool {
@@ -189,7 +211,7 @@ func (s *Session) run(port Port) {
 	var outstanding, readback []byte
 	var answered bool
 	var enableOutput bool
-	var poll, rxPoll int
+	var poll, rxPoll, swrPoll int
 	var buf [1024]byte
 	for {
 		select {
@@ -217,6 +239,9 @@ func (s *Session) run(port Port) {
 				switch {
 				case readback != nil:
 					cmd, readback = readback, nil
+				case s.swrMeter.Load():
+					cmd = swrMeasurementPoll[swrPoll]
+					swrPoll = (swrPoll + 1) % len(swrMeasurementPoll)
 				case enableOutput:
 					cmd = []byte{0x27, 0x11, 1}
 					enableOutput = false
@@ -256,6 +281,8 @@ func (s *Session) run(port Port) {
 	}
 }
 
+var swrMeasurementPoll = [...][]byte{{0x15, 0x11}, {0x15, 0x12}, {0x1c, 0}, {0x15, 0x11}, {0x15, 0x12}, {0x03}, {0x0f}, {0x04}}
+
 type pollKind int
 
 const (
@@ -264,6 +291,8 @@ const (
 	pollTX
 	pollMeter
 	pollRX
+	pollPower
+	pollTuner
 )
 
 // Interleave receiver controls with frequency, TX status and meter reads.
@@ -272,6 +301,7 @@ var pollPlan = [...]pollKind{
 	pollFrequency, pollRX, pollTX, pollRX,
 	pollFrequency, pollMeter, pollRX, pollMode,
 	pollFrequency, pollRX, pollTX, pollMeter,
+	pollFrequency, pollPower, pollTuner, pollMeter,
 }
 
 func readyForCommand(elapsed time.Duration, answered bool) bool {
@@ -286,6 +316,14 @@ func commandReadback(command []byte) []byte {
 		return []byte{4}
 	case 0x11:
 		return command[:1]
+	case 0x1c:
+		if len(command) == 3 && command[1] == 1 {
+			return command[:2]
+		}
+	case 0x14:
+		if len(command) == 4 {
+			return command[:2]
+		}
 	case 0x16:
 		return command[:2]
 	}
@@ -317,7 +355,7 @@ func (s *Session) isReply(frame, command []byte) bool {
 			return true
 		case 0x11:
 			return len(command) == 2
-		case 0x16, 0x27:
+		case 0x14, 0x16, 0x1c, 0x27:
 			return len(command) > 2
 		}
 		return false
@@ -333,6 +371,10 @@ func (s *Session) pollCommand(kind pollKind, transmitting bool) []byte {
 		return []byte{0x04}
 	case pollTX:
 		return []byte{0x1c, 0}
+	case pollPower:
+		return []byte{0x14, 0x0a}
+	case pollTuner:
+		return []byte{0x1c, 1}
 	default:
 		code := byte(s.meter.Load())
 		if code == 0 {
@@ -384,10 +426,31 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 			Mode: data[9], Filter: data[10], Data: (data[11] >> 4) & 1, At: now,
 		}
 	case 0x1c:
-		if len(data) != 3 || data[1] != 0 || data[2] > 1 {
+		if len(data) != 3 {
 			return
 		}
-		state.TX, state.TXKnown = data[2] == 1, true
+		switch {
+		case data[1] == 0 && data[2] <= 1:
+			state.TX, state.TXKnown, state.TXAt = data[2] == 1, true, now
+		case data[1] == 1 && data[2] <= 2:
+			state.Tuner, state.TunerAt = data[2], now
+		default:
+			return
+		}
+	case 0x0f:
+		if len(data) != 2 {
+			return
+		}
+		state.Split, state.SplitAt = data[1] != 0, now
+	case 0x14:
+		if len(data) != 4 || data[1] != 0x0a {
+			return
+		}
+		level, ok := decimal([]byte{data[3], data[2]})
+		if !ok || level > 255 {
+			return
+		}
+		state.PowerSetting, state.PowerAt = int(level), now
 	case 0x11, 0x16:
 		for i, command := range rxCommands {
 			if len(data) == len(command)+1 && bytes.HasPrefix(data, command) {
