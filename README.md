@@ -4,7 +4,9 @@ RX/TX audio console for USB-equipped transceivers, featuring real-time DSP and
 PTT control through RTS or DTR. IC-RADIO lets you use an external USB
 microphone, process your voice, and route it to the radio USB audio input.
 
-![IC-RADIO interface](assets/screenshots/ic-radio-interface.png)
+![IC-RADIO Operation view showing the IC-7300 RF spectrum and waterfall](assets/screenshots/ic-radio-interface.png)
+
+![IC-RADIO Audio view showing TX routing, meters, and filters](assets/screenshots/ic-radio-audio.jpg)
 
 ## Features
 
