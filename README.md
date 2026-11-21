@@ -49,7 +49,7 @@ in IC-RADIO. The Icom IC-7300 is supported but is not required.
 
 ## Windows installation
 
-Download `IC-RADIO-Windows-x64-v0.7.1.zip` from **Releases**, extract it, and
+Download the Windows x64 ZIP from [GitHub Releases](https://github.com/LuislopezMartinez/IC-RADIO/releases/latest), extract it, and
 run `ic-radio.exe`. Windows may display a warning because the executable is not
 digitally signed.
 

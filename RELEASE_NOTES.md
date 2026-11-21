@@ -1,31 +1,19 @@
-# IC-RADIO v0.7.1
+# IC-RADIO v0.8.0
 
-This maintenance release refines the rack-style interface introduced in the
-0.7 series, making status information clearer and reducing controls that could
-be mistaken for active buttons.
+This release adds a dedicated operating console for the Icom IC-7300 over USB CI-V.
 
 ## Highlights
 
-- Redesigned connection indicator with an engraved aluminium panel and a
-  clearer illuminated status LED.
-- Connected port and PTT line are now grouped into compact read-only telemetry
-  instead of appearing as interactive controls.
-- Read-only header fields use engraved fascia styling without hover or button
-  affordances.
-- `PTT SETTINGS` now has a distinct utility-button treatment and gear icon.
-- WDSP availability is shown in a brighter engraved status plate with improved
-  contrast for ready and unavailable states.
-- Small spacing and hierarchy refinements across the top rack panel.
+- View the radio frequency, mode, filter, VFO, and RX/TX status in Operación.
+- Tune by scrolling over frequency digits, entering a frequency directly, or clicking the RF spectrum or waterfall.
+- View the live RF spectrum and waterfall with band selection, span control, vertical zoom, and a decaying peak trace.
+- Select the on-screen meter reading and use S / Po to follow receive and transmit state.
+- Access TX and RX audio processing in Audio, and configure the USB serial port, CI-V, PTT, and Sonic Sequencer in CFG.
 
 ## Download
 
-Download `IC-RADIO-Windows-x64-v0.7.1.zip`, extract the complete folder, and
-run `ic-radio.exe`. Keep the `runtime` directory beside the executable so WDSP
-can load. The executable is unsigned, so Windows may request confirmation the
-first time it is launched.
+Download `IC-RADIO-Windows-x64-v0.8.0.zip`, extract it, and run `ic-radio.exe`.
+Keep the `runtime` directory beside the executable so WDSP can load.
 
-## Important
-
-The radio must support USB audio and RTS or DTR PTT control. Select the USB
-audio input as the radio modulation source. Headphones are recommended when
-using `MON` or previewing signalling cues to avoid acoustic feedback.
+See the IC-7300 operation section of the README for the radio's CI-V settings.
+For a PTT-only setup, turn off CI-V USB in CFG.
