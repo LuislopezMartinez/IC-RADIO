@@ -36,6 +36,9 @@ type radioPanel struct {
 	output                                outputControls
 	swr                                   swrPanel
 	bands                                 bandSelector
+	receiver                              receiverControls
+	confirmVFOEqualize                    bool
+	vfoEqualizeSent, vfoEqualizeBaseline  time.Time
 	selectedBand                          byte
 	page                                  radioPage
 	session                               remote.Radio
@@ -45,8 +48,8 @@ type radioPanel struct {
 	rxAudio                               remoteRXPlayback
 	txAudio                               remoteTX
 	step, meter                           int
-	digitStep, wheelTarget, wheelBase     int64
-	wheelUntil                            time.Time
+	digitStep                             int64
+	wheel                                 wheelTuning
 	showPeak                              bool
 	zoom                                  rfVerticalZoom
 	input                                 string
@@ -69,6 +72,9 @@ func (r *radioPanel) unload() {
 }
 
 func (r *radioPanel) cancelInput() {
+	r.wheel = wheelTuning{}
+	r.receiver = receiverControls{}
+	r.confirmVFOEqualize = false
 	r.rxAudio.menu = 0
 	if r.remoteEdit == editRemotePassword {
 		r.input = ""
@@ -207,8 +213,11 @@ func (a *app) toggleRadioPower() {
 	}
 	if !accepted {
 		a.message = "El control de encendido no está disponible"
-	} else if !online {
-		a.radio.requestInitialVFO()
+	} else {
+		a.localRXAudio.enabled.Store(false)
+		if !online {
+			a.radio.requestInitialVFO()
+		}
 	}
 }
 
@@ -223,7 +232,7 @@ func drawRadioPower(state civ.State, online bool) {
 		shade = color.red
 	}
 	rect := radioPowerRect()
-	rl.DrawRectangleRounded(rect, .24, 8, rl.NewColor(19, 25, 29, 255))
+	rl.DrawRectangleRounded(rect, .24, 8, rl.NewColor(18, 18, 21, 255))
 	rl.DrawRectangleRoundedLinesEx(rect, .24, 8, 2, shade)
 	center := rl.NewVector2(rect.X+rect.Width/2, rect.Y+rect.Height/2)
 	rl.DrawRing(center, 8, 11, -54, 234, 32, shade)
@@ -233,10 +242,19 @@ func drawRadioPower(state civ.State, online bool) {
 func (a *app) drawNavigation() {
 	radioState, online := a.radio.snapshot()
 	drawRadioPower(radioState, online)
-	drawMilitaryText("IC-RADIO", 83, 7, 50, rl.NewColor(18, 23, 25, 255))
-	drawText("by EA3IWW", 336, 24, 21, rl.NewColor(32, 38, 42, 255))
+	drawMilitaryText("IC-RADIO", 83, 7, 50, color.text)
+	drawText("by EA3IWW", 336, 24, 21, color.muted)
 	for i, name := range []string{"OPERACIÓN", "AUDIO", "CFG"} {
-		drawConsoleButton(navRect(i), name, radioPage(i) == a.radio.page, false)
+		rect := navRect(i)
+		fill, edge := color.panel2, consoleEdge
+		if radioPage(i) == a.radio.page {
+			fill, edge = rl.NewColor(126, 20, 33, 255), color.red
+			if a.radio.page == pageOperation {
+				fill, edge = rl.NewColor(24, 45, 23, 255), color.green
+			}
+		}
+		drawCutPanel(rect, 9, fill, edge, 1.5)
+		drawConsoleText(semiboldFont, name, rect, 23, color.text)
 	}
 	port := a.settings.COM
 	if port == "" {
@@ -246,9 +264,9 @@ func (a *app) drawNavigation() {
 	if a.settings.RemoteMode {
 		route = "REMOTO"
 	}
-	drawConsoleText(semiboldFont, route, rl.NewRectangle(1110, 12, 227, 44), 23, rl.NewColor(14, 20, 23, 255))
+	drawConsoleText(semiboldFont, route, rl.NewRectangle(1110, 12, 227, 44), 23, color.muted)
 	for _, x := range []int32{507, 1094} {
-		rl.DrawLine(x, 13, x, 55, rl.NewColor(28, 35, 39, 255))
+		rl.DrawLine(x, 13, x, 55, consoleEdge)
 	}
 	state, shade, fill := "DESCONECTADO", color.red, rl.NewColor(52, 13, 19, 255)
 	if online || a.ptt.Connected() && a.radio.session == nil && a.settings.DisableCIV {
@@ -299,6 +317,7 @@ func (a *app) connectFromHeader() {
 }
 
 func (a *app) disconnectRadio() {
+	a.localRXAudio.enabled.Store(false)
 	if a.radio.remote != nil {
 		a.stopRemoteTX()
 		a.stopRemoteAudio()
@@ -313,6 +332,7 @@ func (a *app) disconnectRadio() {
 	a.signalEnding = false
 	a.keyPTTActive, a.mousePTTActive = false, false
 	a.radio.session = nil
+	a.radio.vfoEqualizeSent = time.Time{}
 	a.radio.selectedBand = 0
 	a.radio.initialVFOPending = false
 	a.radio.cancelInput()
@@ -494,6 +514,18 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 		return
 	}
 	state, online := r.snapshot()
+	canTune := online && state.TXKnown && !state.TX && !state.PowerPending
+	defer func() {
+		if !canTune || a.transmitting() || r.editing || r.modeMenu || r.bands.open || !r.bands.requestAt.IsZero() {
+			r.wheel = wheelTuning{}
+		} else if r.wheel.target != 0 {
+			r.wheel.update(time.Now(), state, r.session.Tune)
+		}
+	}()
+	if a.updateReceiverControls(mouse, state, online && state.TXKnown && !state.TX && !state.PowerPending &&
+		!a.transmitting() && !r.editing && !r.modeMenu && !r.bands.open && r.bands.requestAt.IsZero()) {
+		return
+	}
 	if !r.editing && !r.modeMenu && a.updateBandSelector(mouse, state, online) {
 		return
 	}
@@ -560,16 +592,15 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 			r.step = (r.step + 1) % len(tuningSteps)
 		}
 		r.digitStep = 0
-		r.wheelUntil = time.Time{}
+		r.wheel = wheelTuning{}
 	}
 	if r.zoom.update(mouse) {
 		return
 	}
 	if clicked(mouse, peakRect()) {
 		r.showPeak = !r.showPeak
-		clear(r.envelope.peakTargets[:])
-		for i, bin := range r.envelope.bins {
-			r.envelope.peakLevels[i] = bin.level
+		for i, raw := range state.Sweep.Levels {
+			r.envelope.peakLevels[i] = float32(raw)
 		}
 	}
 	if clicked(mouse, spanRect()) {
@@ -588,10 +619,9 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 			return
 		}
 		if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
-			shown, _ := displayedFrequency(state, online, time.Now())
+			shown, _ := r.shownFrequency(state, online, time.Now())
 			if digit := frequencyDigitAt(shown, mouse); digit != 0 {
 				r.digitStep = digit
-				r.wheelUntil = time.Time{}
 			} else {
 				r.editing, r.input = true, ""
 				return
@@ -605,7 +635,7 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 	graph, waterfall := rfGraph(), rfWaterfall()
 	sweep := state.Sweep
 	if time.Since(sweep.At) < 2*time.Second && sweep.High > sweep.Low && (clicked(mouse, graph) || clicked(mouse, waterfall)) {
-		r.wheelUntil = time.Time{}
+		r.wheel = wheelTuning{}
 		tuneArea := graph
 		if rl.CheckCollisionPointRec(mouse, waterfall) {
 			tuneArea = waterfall
@@ -615,20 +645,8 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 	}
 	wheelStep := operationTuningStep(r.digitStep, step,
 		rl.CheckCollisionPointRec(mouse, frequencyRect()) || rl.CheckCollisionPointRec(mouse, graph))
-	if wheelStep != 0 {
-		if delta := int64(rl.GetMouseWheelMove()); delta != 0 && state.Frequency > 0 {
-			now := time.Now()
-			base := state.Frequency
-			if now.Before(r.wheelUntil) && base >= min(r.wheelBase, r.wheelTarget) && base <= max(r.wheelBase, r.wheelTarget) {
-				base = r.wheelTarget
-			} else {
-				r.wheelBase = base
-			}
-			target := tuneDigit(base, wheelStep, delta)
-			if r.session.Tune(target) {
-				r.wheelTarget, r.wheelUntil = target, now.Add(450*time.Millisecond)
-			}
-		}
+	if delta := rl.GetMouseWheelMove(); canTune && wheelStep != 0 && delta != 0 && state.Frequency > 0 {
+		r.wheel.queue(time.Now(), state.Frequency, wheelStep, float64(delta))
 	}
 }
 
@@ -700,6 +718,9 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 		rl.DrawRectangleRounded(statusRect, .18, 8, rl.NewColor(108, 12, 22, 255))
 		rl.DrawRectangleRoundedLinesEx(statusRect, .18, 8, 2, color.red)
 		shade = color.text
+	} else if status == "RX" {
+		drawCutPanel(statusRect, 7, color.green, color.green, 1)
+		shade = color.bg
 	}
 	drawConsoleText(displayFont, status, statusRect, 37, shade)
 	mode := "MODO"
@@ -724,7 +745,7 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 	drawText("PASO", 324, 155, 17, color.muted)
 	step := operationTuningStep(r.digitStep, tuningSteps[r.step], true)
 	drawConsoleButton(stepRect(), fmt.Sprintf("%d Hz", step), r.digitStep != 0, false)
-	hz, exact := displayedFrequency(state, online, time.Now())
+	hz, exact := r.shownFrequency(state, online, time.Now())
 	if r.editing {
 		drawCenteredFitted(r.input+"_", rl.NewRectangle(552, 103, 378, 96), 68, color.text)
 	} else if hz > 0 {
@@ -751,8 +772,16 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 		a.drawRF(state, peaks, online)
 		a.drawBandButton(state, online)
 		a.drawBandPanel(state)
+		if r.receiver.agcOpen {
+			for i := 1; i < len(agcLabels); i++ {
+				drawConsoleButton(agcOption(i), agcLabels[i], state.RX[civ.AGC].Value == byte(i), false)
+			}
+		}
 	}
 	r.swr.draw(state.Frequency)
+	if r.confirmVFOEqualize {
+		drawVFOEqualizeConfirmation()
+	}
 	drawConsolePanel(rl.NewRectangle(7, 770, 1586, 123), consoleEdge)
 	startedAt := state.TXSince
 	if a.transmitting() {
@@ -795,7 +824,7 @@ func (a *app) drawRadioMeter(state civ.State, online bool) {
 		level = float64(state.Meters[code]) / 255
 	}
 	for i := 0; i < segments; i++ {
-		shade := color.cyan
+		shade := color.signal
 		position := float64(i+1) / segments
 		if position >= .79 {
 			shade = color.red
@@ -803,7 +832,7 @@ func (a *app) drawRadioMeter(state civ.State, online bool) {
 			shade = color.amber
 		}
 		if position > level {
-			shade = mix(rl.NewColor(24, 39, 46, 255), shade, .29)
+			shade = mix(rl.NewColor(31, 31, 35, 255), shade, .29)
 		}
 		rl.DrawRectangle(x+int32(i)*width/segments, y, width/segments-2, 18, shade)
 	}
@@ -839,31 +868,33 @@ func (a *app) drawRadioMeter(state civ.State, online bool) {
 
 func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 	r := &a.radio
-	drawConsolePanel(rl.NewRectangle(7, 225, 1586, 533), consoleEdge)
-	drawText("ESPECTRO RF", 28, 241, 29, color.text)
+	drawCutPanel(rl.NewRectangle(7, 225, 1586, 533), 11, color.panel, rl.NewColor(120, 29, 42, 255), 1.5)
 	r.swr.drawButtons()
-	drawConsoleButton(peakRect(), "PEAK", r.showPeak, false)
+	drawRFOption(peakRect(), "PEAK", r.showPeak)
 	drawRXButtons(state, online)
+	r.receiver.draw(state, online)
 	r.zoom.draw()
 	drawConsoleButton(spanRect(), "SPAN", false, true)
-	rl.DrawLine(365, 240, 365, 277, consoleEdge)
+	for _, x := range []int32{152, 540, 668, 980} {
+		rl.DrawLine(x, 241, x, 275, consoleEdge)
+	}
 	graph, waterfall := rfGraph(), rfWaterfall()
 	sweep := state.Sweep
 	valid := online && time.Since(sweep.At) < 2*time.Second && sweep.Low < sweep.High
-	rl.DrawRectangleGradientV(int32(graph.X), int32(graph.Y), int32(graph.Width), int32(graph.Height), rl.NewColor(5, 16, 22, 255), rl.NewColor(8, 25, 34, 255))
+	rl.DrawRectangleGradientV(int32(graph.X), int32(graph.Y), int32(graph.Width), int32(graph.Height), rl.NewColor(8, 8, 10, 255), rl.NewColor(16, 16, 19, 255))
 	rl.DrawRectangleLinesEx(graph, 1, consoleEdge)
-	rl.DrawRectangleRec(waterfall, rl.NewColor(4, 15, 35, 255))
+	rl.DrawRectangleRec(waterfall, rl.NewColor(5, 8, 6, 255))
 	if valid {
 		r.zoom.observe(sweep)
 	}
-	r.zoom.drawGrid(graph)
+	if r.swr.show {
+		drawSWRScale(graph)
+	} else {
+		r.zoom.drawGrid(graph)
+	}
 	for i := 0; i <= 5; i++ {
 		x := graph.X + float32(i)*graph.Width/5
-		rl.DrawLineEx(rl.NewVector2(x, graph.Y), rl.NewVector2(x, graph.Y+graph.Height), 1, rl.NewColor(28, 62, 77, 255))
-		if valid {
-			label := fmt.Sprintf("%.3f", float64(rfFrequency(graph, x, sweep))/1000000)
-			drawCentered(label, rl.NewRectangle(x-44, 535, 88, 29), 21, color.text, 0)
-		}
+		rl.DrawLineEx(rl.NewVector2(x, graph.Y), rl.NewVector2(x, graph.Y+graph.Height), 1, rl.NewColor(44, 44, 49, 255))
 	}
 	if !valid {
 		r.lastSweep = civ.Sweep{}
@@ -890,10 +921,14 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 	}
 	drawConsoleButton(spanRect(), span, false, true)
 	r.envelope.update(sweep, peaks, time.Now())
+	if r.envelope.interval > 0 {
+		label := fmt.Sprintf("%.1f barridos/s", 1/r.envelope.interval.Seconds())
+		drawText(label, 100, 278, 13, color.muted)
+	}
 	clipped := false
-	for i, bin := range r.envelope.bins {
+	for i, sample := range r.envelope.levels {
 		x := graph.X + float32(i)*graph.Width/(civ.Samples-1)
-		level := r.zoom.displayLevel(bin.level)
+		level := r.zoom.displayLevel(sample)
 		peak := r.zoom.displayLevel(r.envelope.peakLevels[i])
 		clipped = clipped || level > 160 || (r.showPeak && peak > 160)
 		y := graph.Y + graph.Height*(1-max(0, min(160, level))/160)
@@ -904,9 +939,9 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 	}
 	r.fillGradient.draw(r.fill[:], graph, r.zoom)
 	if r.showPeak {
-		rl.DrawLineStrip(r.peakTrace[:], rl.NewColor(209, 192, 248, 230))
+		rl.DrawLineStrip(r.peakTrace[:], rl.NewColor(182, 190, 185, 230))
 	}
-	rl.DrawLineStrip(r.trace[:], color.cyan)
+	rl.DrawLineStrip(r.trace[:], color.green)
 	if clipped {
 		alert := rl.NewRectangle(graph.X+graph.Width-110, graph.Y+5, 104, 26)
 		drawConsolePanel(alert, color.amber)
@@ -917,19 +952,8 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 	if r.texture.ID != 0 {
 		rl.DrawTexturePro(r.texture, rl.NewRectangle(.5, 0, civ.Samples-1, waterfallRows), waterfall, rl.Vector2{}, 0, rl.White)
 	}
-	a.drawBandCoverage(graph, waterfall, sweep, state.Frequency)
-	hz, exact := displayedFrequency(state, online, time.Now())
-	if hz > 0 && hz >= sweep.Low && hz <= sweep.High {
-		x := rfFrequencyX(graph, sweep, hz)
-		shade := color.amber
-		if !exact {
-			shade = color.muted
-		}
-		rl.DrawLineEx(rl.NewVector2(x, graph.Y), rl.NewVector2(x, graph.Y+graph.Height), 3, shade)
-		rl.DrawLineEx(rl.NewVector2(x, waterfall.Y-10), rl.NewVector2(x, waterfall.Y), 2, shade)
-		rl.DrawRectangleRec(rl.NewRectangle(max(graph.X-20, min(graph.X+graph.Width-64, x-42)), 531, 84, 32), rl.NewColor(6, 19, 26, 255))
-		drawConsoleText(semiboldFont, fmt.Sprintf("%.3f", float64(hz)/1e6), rl.NewRectangle(max(graph.X-20, min(graph.X+graph.Width-64, x-42)), 531, 84, 32), 22, shade)
-	}
+	hz, exact := r.shownFrequency(state, online, time.Now())
+	a.drawBandCoverage(graph, waterfall, sweep, state.Frequency, hz, exact)
 	r.swr.overlay(graph, sweep)
 }
 
@@ -958,7 +982,7 @@ func (r *radioPanel) updateWaterfall(sweep civ.Sweep) {
 	}
 	if r.lastSweep.Low != sweep.Low || r.lastSweep.High != sweep.High {
 		for i := range r.pixels {
-			r.pixels[i] = rl.NewColor(3, 11, 30, 255)
+			r.pixels[i] = rl.NewColor(5, 8, 6, 255)
 		}
 	}
 	copy(r.pixels[civ.Samples:], r.pixels[:len(r.pixels)-civ.Samples])
@@ -970,16 +994,18 @@ func (r *radioPanel) updateWaterfall(sweep civ.Sweep) {
 }
 
 func waterfallColor(level byte) rl.Color {
-	navy := rl.NewColor(2, 7, 26, 255)
-	blue := rl.NewColor(11, 48, 194, 255)
+	floor := rl.NewColor(4, 4, 5, 255)
+	weak := rl.NewColor(37, 39, 38, 255)
+	signal := rl.NewColor(140, 144, 140, 255)
+	strong := rl.NewColor(115, 238, 82, 255)
 	switch {
 	case level <= 16:
-		return mix(navy, blue, float32(level)/16)
+		return mix(floor, weak, float32(level)/16)
 	case level <= 54:
-		return mix(blue, color.cyan, float32(level-16)/38)
+		return mix(weak, signal, float32(level-16)/38)
 	case level <= 94:
-		return mix(color.cyan, color.amber, float32(level-54)/40)
+		return mix(signal, strong, float32(level-54)/40)
 	default:
-		return mix(color.amber, rl.White, float32(level-94)/66)
+		return mix(strong, rl.White, float32(level-94)/66)
 	}
 }

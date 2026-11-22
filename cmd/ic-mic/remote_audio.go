@@ -113,14 +113,20 @@ func (a *app) startRemoteAudio() {
 		for {
 			playing := false
 			err := client.PlayRX(ctx, func(samples []float32) {
+				if !radioRXAudioReady(client.Snapshot()) || a.radio.txAudio.active.Load() {
+					if playing {
+						playing = false
+						rx.meter.reset()
+						rx.status.Store("Esperando confirmación de recepción de la emisora")
+					}
+					return
+				}
 				if !playing {
 					rx.status.Store("Recibiendo audio de la emisora")
 					playing = true
 				}
-				if !a.radio.txAudio.active.Load() {
-					rx.meter.process(samples, processor.Process)
-					a.monitor.Write(samples)
-				}
+				rx.meter.process(samples, processor.Process)
+				a.monitor.Write(samples)
 			})
 			if ctx.Err() != nil {
 				return

@@ -17,9 +17,9 @@ func frequencyGlyphs(hz int64) []frequencyGlyph {
 		return nil
 	}
 	text := fmt.Sprintf("%d.%03d.%03d", hz/1000000, hz/1000%1000, hz%1000)
-	const digitWidth, dotWidth = 43, 14
+	const digitWidth, dotWidth = 46, 15
 	width := float32((len(text)-2)*digitWidth + 2*dotWidth)
-	x := 552 + (378-width)/2
+	x := 542 + (402-width)/2
 	step := int64(1000000)
 	if hz >= 10000000 {
 		step *= 10
@@ -44,7 +44,25 @@ func drawFrequencyDigits(hz, selected int64) {
 			shade = color.amber
 			rl.DrawRectangle(int32(glyph.cell.X+5), 194, int32(glyph.cell.Width-10), 2, shade)
 		}
-		drawConsoleText(displayFont, glyph.text, glyph.cell, 87, shade)
+		drawDialGlyph(glyph, shade)
+	}
+}
+
+func drawDialGlyph(glyph frequencyGlyph, shade rl.Color) {
+	const spacing = 0
+	size := float32(88)
+	width := rl.MeasureTextEx(semiboldFont, glyph.text, size, spacing).X
+	if width > glyph.cell.Width-1 {
+		size *= (glyph.cell.Width - 1) / width
+	}
+	dim := rl.MeasureTextEx(semiboldFont, glyph.text, size, spacing)
+	center := rl.NewVector2(
+		glyph.cell.X+(glyph.cell.Width-dim.X)/2,
+		glyph.cell.Y+(glyph.cell.Height-dim.Y)/2,
+	)
+	// A narrow stroke gives the white numerals more weight at small scales.
+	for _, offset := range [...]rl.Vector2{{X: -0.8}, {X: 0.8}, {Y: -0.6}, {Y: 0.6}, {}} {
+		rl.DrawTextEx(semiboldFont, glyph.text, rl.NewVector2(center.X+offset.X, center.Y+offset.Y), size, spacing, shade)
 	}
 }
 

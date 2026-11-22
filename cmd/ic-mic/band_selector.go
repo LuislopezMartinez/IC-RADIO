@@ -48,7 +48,7 @@ type bandSelector struct {
 	tuneAt    time.Time
 }
 
-func bandControl() rl.Rectangle { return rl.NewRectangle(228, 240, 118, 36) }
+func bandControl() rl.Rectangle { return rl.NewRectangle(24, 240, 126, 36) }
 func bandPanel() rl.Rectangle   { return rl.NewRectangle(228, 289, 527, 240) }
 
 func bandKey(index int) rl.Rectangle {
@@ -143,7 +143,7 @@ func (a *app) requestBandMemory(band, register byte, now time.Time) {
 	r := &a.radio
 	if r.session.ReadBandMemory(band, register) {
 		r.bands = bandSelector{band: band, register: register, requestAt: now}
-		r.wheelUntil = time.Time{}
+		r.wheel = wheelTuning{}
 		a.message = "Leyendo el registro de banda del Icom"
 	} else {
 		a.message = "CI-V ocupado. Vuelve a elegir la banda"
@@ -155,7 +155,7 @@ func (a *app) drawBandButton(state civ.State, online bool) {
 	if i := a.radio.coverageBand(state.Frequency); online && i >= 0 && time.Since(state.FrequencyAt) < 2*time.Second {
 		label += " " + radioBands[i].name
 	}
-	drawConsoleButton(bandControl(), label, a.radio.bands.open, false)
+	drawConsoleButton(bandControl(), label+"  ▼", a.radio.bands.open, false)
 }
 
 func (a *app) drawBandPanel(state civ.State) {
@@ -163,7 +163,7 @@ func (a *app) drawBandPanel(state civ.State) {
 	if !s.open {
 		return
 	}
-	drawConsolePanel(bandPanel(), color.cyan)
+	drawConsolePanel(bandPanel(), color.signal)
 	if s.band != 0 {
 		drawText("REGISTROS DEL ICOM", 247, 306, 22, color.text)
 		for i := range 3 {

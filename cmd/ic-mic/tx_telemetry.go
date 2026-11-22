@@ -105,13 +105,13 @@ func drawTXGauge(rect rl.Rectangle, reading txReading, position float64) {
 	drawConsoleText(semiboldFont, reading.label, rl.NewRectangle(rect.X+10, rect.Y+3, rect.Width-20, 30), 32, color.text)
 	center := rl.NewVector2(rect.X+rect.Width/2, rect.Y+217)
 	const radius = 151
-	rl.DrawRing(center, radius-9, radius, 213, 327, 64, rl.NewColor(31, 56, 66, 255))
+	rl.DrawRing(center, radius-9, radius, 213, 327, 64, rl.NewColor(47, 47, 52, 255))
 	if reading.code == 0x12 {
 		rl.DrawRing(center, radius-9, radius, 213, 241.5, 16, swrZoneColors[0])
 		rl.DrawRing(center, radius-9, radius, 241.5, 270, 16, swrZoneColors[1])
 		rl.DrawRing(center, radius-9, radius, 270, 327, 28, swrZoneColors[2])
 	} else if reading.available && position > .001 {
-		shade := color.cyan
+		shade := color.signal
 		if reading.code == 0x13 {
 			shade = color.amber
 		}
@@ -136,8 +136,8 @@ func drawTXGauge(rect rl.Rectangle, reading txReading, position float64) {
 	}
 	if reading.available {
 		tip := txScalePoint(center, radius-2, position)
-		rl.DrawLineEx(center, tip, 3, rl.NewColor(247, 234, 197, 255))
-		rl.DrawCircleV(center, 8, rl.NewColor(174, 190, 194, 255))
+		rl.DrawLineEx(center, tip, 3, rl.NewColor(246, 246, 247, 255))
+		rl.DrawCircleV(center, 8, rl.NewColor(184, 184, 190, 255))
 	}
 	rl.DrawLineEx(rl.NewVector2(rect.X+36, center.Y+17), rl.NewVector2(rect.X+rect.Width-36, center.Y+17), 1, consoleEdge)
 	drawConsoleText(displayFont, reading.text(), rl.NewRectangle(rect.X+15, center.Y+20, rect.Width-30, 49), 48, color.text)
@@ -149,9 +149,9 @@ func drawTXReadout(rect rl.Rectangle, reading txReading, ticks []string) {
 	const segments = 25
 	x, y, w := rect.X+20, rect.Y+65, rect.Width-40
 	for i := 0; i < segments; i++ {
-		shade := rl.NewColor(37, 57, 66, 255)
+		shade := rl.NewColor(45, 45, 50, 255)
 		if reading.available && float64(i+1)/segments <= reading.fraction() {
-			shade = color.cyan
+			shade = color.signal
 		}
 		rl.DrawRectangleRec(rl.NewRectangle(x+float32(i)*w/segments, y, w/segments-2, 15), shade)
 	}
@@ -186,9 +186,9 @@ func drawTXHeaderPower(reading txReading) {
 	drawConsoleText(semiboldFont, "Po", rl.NewRectangle(1040, 127, 83, 46), 29, color.text)
 	const x, y, width, segments = 1140, 143, 417, 32
 	for i := range segments {
-		shade := rl.NewColor(37, 57, 66, 255)
+		shade := rl.NewColor(45, 45, 50, 255)
 		if reading.available && float64(i+1)/segments <= reading.fraction() {
-			shade = color.cyan
+			shade = color.signal
 		}
 		rl.DrawRectangle(x+int32(i)*width/segments, y, width/segments-2, 22, shade)
 	}

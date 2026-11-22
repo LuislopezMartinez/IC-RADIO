@@ -148,7 +148,7 @@ func (cmd request) apply(r Radio) bool {
 	case "tuner":
 		return value >= 0 && value <= 2 && r.SetTuner(byte(value))
 	case "rx-control":
-		return value >= int64(civ.Preamp) && value <= int64(civ.NoiseReduction) &&
+		return value >= int64(civ.Preamp) && value <= int64(civ.AGC) &&
 			r.SetRXControl(civ.RXControl(value), cmd.Extra)
 	}
 	return false

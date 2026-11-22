@@ -356,8 +356,8 @@ func TestRXAndTXEditorsUseDifferentAccentFamilies(t *testing.T) {
 	if rxAccent.G <= rxAccent.R || rxAccent.G <= rxAccent.B {
 		t.Fatalf("el acento RX no pertenece a la familia verde: %+v", rxAccent)
 	}
-	if txAccent.R <= txAccent.G || txAccent.G <= txAccent.B {
-		t.Fatalf("el acento TX no pertenece a la familia naranja: %+v", txAccent)
+	if txAccent.R <= txAccent.G || txAccent.R <= txAccent.B || txAccent.G > txAccent.R/2 {
+		t.Fatalf("el acento TX no pertenece a la familia roja: %+v", txAccent)
 	}
 }
 
@@ -446,7 +446,7 @@ func TestSpectrumSegmentColorsCommunicateLevel(t *testing.T) {
 	nominal := spectrumSegmentColor(-35)
 	strong := spectrumSegmentColor(-20)
 	peak := spectrumSegmentColor(-5)
-	if quiet.B <= quiet.R || nominal.G <= nominal.B || strong.R <= strong.G || peak.R <= peak.G {
+	if quiet.G <= quiet.R || nominal.G <= quiet.G || strong.R <= strong.G || peak.R <= peak.G {
 		t.Fatalf("gradiente inesperado: quiet=%+v nominal=%+v strong=%+v peak=%+v", quiet, nominal, strong, peak)
 	}
 }

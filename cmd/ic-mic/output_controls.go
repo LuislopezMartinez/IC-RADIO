@@ -107,7 +107,7 @@ func (a *app) drawOutputControls(state civ.State, online bool) {
 	drawConsoleText(semiboldFont, value, box, 22, shade)
 	track := outputPowerTrack()
 	if hasPower {
-		drawMechanicalSlider(track, float64(level)*100/255, color.amber)
+		drawMechanicalSlider(track, float64(level)*100/255, color.red)
 	} else {
 		rl.DrawRectangleRounded(track, .5, 8, color.panel2)
 	}

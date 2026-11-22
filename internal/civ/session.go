@@ -39,7 +39,7 @@ type State struct {
 	VFOAt                  time.Time
 	VFOEqualizedAt         time.Time
 	Band                   BandMemory
-	RX                     [5]RXValue
+	RX                     [rxControlCount]RXValue
 	Frequency              int64
 	FrequencyAt            time.Time
 	Mode, Filter           byte
@@ -73,6 +73,11 @@ const (
 	AutoNotch
 	NoiseBlanker
 	NoiseReduction
+	RFGain
+	AFGain
+	Squelch
+	AGC
+	rxControlCount
 )
 
 type RXValue struct {
@@ -80,7 +85,10 @@ type RXValue struct {
 	At    time.Time
 }
 
-var rxCommands = [...][]byte{{0x16, 2}, {0x11}, {0x16, 0x41}, {0x16, 0x22}, {0x16, 0x40}}
+var rxCommands = [rxControlCount][]byte{
+	{0x16, 2}, {0x11}, {0x16, 0x41}, {0x16, 0x22}, {0x16, 0x40},
+	{0x14, 2}, {0x14, 1}, {0x14, 3}, {0x16, 0x12},
+}
 
 type powerRequest byte
 
@@ -209,7 +217,14 @@ func (s *Session) SetScopeCenter() bool {
 }
 
 func (s *Session) SetRXControl(control RXControl, value byte) bool {
-	return s.command(append(append([]byte{}, rxCommands[control]...), value)...)
+	if control < Preamp || control >= rxControlCount || control == AGC && (value < 1 || value > 3) {
+		return false
+	}
+	command := append([]byte(nil), rxCommands[control]...)
+	if command[0] == 0x14 {
+		return s.command(append(command, value/100, (value/10%10)<<4|value%10)...)
+	}
+	return s.command(append(command, value)...)
 }
 
 func (s *Session) SelectVFO(vfo byte) bool {
@@ -583,14 +598,25 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 		}
 		state.Split, state.SplitAt = data[1] != 0, now
 	case 0x14:
-		if len(data) != 4 || data[1] != 0x0a {
+		if len(data) != 4 {
 			return
 		}
 		level, ok := decimal([]byte{data[3], data[2]})
 		if !ok || level > 255 {
 			return
 		}
-		state.PowerSetting, state.PowerAt = int(level), now
+		switch data[1] {
+		case 1:
+			state.RX[AFGain] = RXValue{byte(level), now}
+		case 2:
+			state.RX[RFGain] = RXValue{byte(level), now}
+		case 3:
+			state.RX[Squelch] = RXValue{byte(level), now}
+		case 0x0a:
+			state.PowerSetting, state.PowerAt = int(level), now
+		default:
+			return
+		}
 	case 0x11, 0x16:
 		for i, command := range rxCommands {
 			if len(data) == len(command)+1 && bytes.HasPrefix(data, command) {

@@ -1,12 +1,13 @@
-# IC-RADIO v0.10.0
+# IC-RADIO v0.11.0
 
 ## Highlights
 
-- Added a password-protected local IC-7300 server for CI-V, RX audio, microphone TX and PTT, and SWR sweeps. The client and server run on the same Windows PC.
-- Added a dedicated transmission panel for output power, SWR, ALC, supply voltage and current, and compression.
-- Added RF band coverage indicators and refined frequency entry and the initial VFO behavior.
-- Updated the SWR panel and shared the sweep logic between the local console and server modes.
+- Redesigned the operating console and distinguished the TX and RX audio profiles by color.
+- Added CI-V receiver controls for RF gain, AF gain, squelch and AGC.
+- Improved mouse-wheel tuning and frequency display, and added confirmation before sending VFO A=B.
+- Refined RF spectrum rendering, peak tracking, band edge indicators, and the SWR panel.
+- Updated RX audio handling as the radio connection changes.
 
 ## Download
 
-Extract `IC-RADIO-Windows-x64-v0.10.0.zip` and run `ic-radio.exe`. Keep the `runtime` folder alongside the executables. For local server mode, follow the README instructions for `ic-radio-server.exe`.
+Extract `IC-RADIO-Windows-x64-v0.11.0.zip` and run `ic-radio.exe`. Keep the `runtime` folder alongside the executables. The ZIP also includes `ic-radio-server.exe` for local server mode.

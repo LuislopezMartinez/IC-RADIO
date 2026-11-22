@@ -266,6 +266,33 @@ func TestConfirmedVFOFeedback(t *testing.T) {
 	}
 }
 
+func TestReceiverGainAndAGCCommands(t *testing.T) {
+	s := &Session{address: 0x94, requests: make(chan []byte, 4)}
+	now := time.Now()
+	var scope assembler
+	for _, tc := range []struct {
+		control RXControl
+		value   byte
+		command []byte
+	}{
+		{RFGain, 200, []byte{0x14, 2, 2, 0}},
+		{AFGain, 128, []byte{0x14, 1, 1, 0x28}},
+		{Squelch, 35, []byte{0x14, 3, 0, 0x35}},
+		{AGC, 3, []byte{0x16, 0x12, 3}},
+	} {
+		if !s.SetRXControl(tc.control, tc.value) || !bytes.Equal(<-s.requests, tc.command) {
+			t.Fatalf("wrong command for control %d", tc.control)
+		}
+		s.receive(append([]byte{0xe0, 0x94}, tc.command...), &scope, now)
+		if got := s.Snapshot().RX[tc.control]; got != (RXValue{tc.value, now}) {
+			t.Fatalf("wrong reading for control %d: %+v", tc.control, got)
+		}
+	}
+	if s.SetRXControl(AGC, 4) || s.SetRXControl(-1, 0) {
+		t.Fatal("accepted an unsupported control or AGC preset")
+	}
+}
+
 func TestSWRPowerControl(t *testing.T) {
 	s := &Session{address: 0x94, requests: make(chan []byte, 1)}
 	if !s.SetPower(77) || !bytes.Equal(<-s.requests, []byte{0x14, 0x0a, 0, 0x77}) {

@@ -32,8 +32,8 @@ func swrCountButton() rl.Rectangle   { return rl.NewRectangle(1121, 561, 169, 53
 
 const swrThreshold = 1.5
 
-var swrCool = rl.NewColor(33, 192, 234, 255)
-var swrWarm = rl.NewColor(255, 140, 52, 255)
+var swrCool = rl.NewColor(91, 217, 102, 255)
+var swrWarm = rl.NewColor(242, 85, 97, 255)
 
 func (panel *swrPanel) close() {
 	if panel.cancel != nil {
@@ -171,10 +171,15 @@ func (a *app) startSWR() {
 	}
 	client := a.radio.remote
 	session, local := a.radio.session.(*civ.Session)
-	if client == nil && (!local || a.txView.engine == nil || !a.txView.engine.Status().Running ||
-		!isRadioUSBCodec(deviceName(a.txView.outputs, a.txView.outIndex))) {
-		p.status = "Selecciona USB Audio CODEC como salida en Audio TX"
-		return
+	if client == nil {
+		if !local || a.txView.engine == nil || !a.txView.engine.Status().Running {
+			p.status = "El audio TX no está activo. Revisa Audio → TX"
+			return
+		}
+		if !isConfiguredRadioOutput(deviceName(a.txView.outputs, a.txView.outIndex), a.settings.Output) {
+			p.status = "Selecciona la salida USB de la emisora en Audio → TX"
+			return
+		}
 	}
 	request := swr.Request{Center: state.Frequency, Step: swr.Steps[p.step], Count: 13 - 2*p.count}
 	points := request.ValidatedPoints()
@@ -183,6 +188,7 @@ func (a *app) startSWR() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	a.radio.wheel = wheelTuning{}
 	reports, done := make(chan swr.Report, 16), make(chan struct{})
 	p.points, p.status, p.cancel, p.reports, p.done = append([]swr.Point(nil), points...), "Preparando barrido", cancel, reports, done
 	p.resultStep = request.Step
@@ -213,15 +219,8 @@ func (a *app) startSWR() {
 }
 
 func (p *swrPanel) drawButtons() {
-	r := swrOverlayButton()
-	if p.show {
-		rl.DrawRectangleRounded(r, .2, 6, rl.NewColor(140, 24, 35, 255))
-		rl.DrawRectangleRoundedLines(r, .2, 6, color.red)
-		drawConsoleText(semiboldFont, "SWR", r, 13, color.text)
-	} else {
-		drawConsoleButtonSize(r, "SWR", false, false, 13)
-	}
-	drawConsoleButtonSize(swrTestButton(), "TEST", p.open, false, 12)
+	drawRFOptionSize(swrOverlayButton(), "SWR", p.show, 13)
+	drawRFOptionSize(swrTestButton(), "TEST", p.open, 12)
 }
 
 func (p *swrPanel) draw(center int64) {
@@ -260,7 +259,7 @@ func (p *swrPanel) draw(center int64) {
 	drawText("RF POWER ~30 W", 306, 567, 15, color.muted)
 
 	graph := rl.NewRectangle(533, 496, 559, 174)
-	rl.DrawRectangleRec(graph, rl.NewColor(7, 15, 24, 255))
+	rl.DrawRectangleRec(graph, rl.NewColor(10, 10, 13, 255))
 	rl.DrawRectangleLinesEx(graph, 1, consoleEdge)
 	threshold := swrY(graph, swrThreshold)
 	base := swrY(graph, 1)
@@ -398,26 +397,29 @@ func drawSWRLine(a, b rl.Vector2, from, to float32, tint rl.Color) {
 	rl.DrawLineEx(rl.NewVector2(a.X+from*dx, a.Y+from*dy), rl.NewVector2(a.X+to*dx, a.Y+to*dy), 2.5, tint)
 }
 
-func (p *swrPanel) overlay(graph rl.Rectangle, sweep civ.Sweep) {
-	if !p.show || sweep.High <= sweep.Low {
-		return
-	}
-	scale := rl.NewRectangle(graph.X+graph.Width-52, graph.Y, 62, graph.Height)
-	rl.DrawRectangleRec(scale, color.panel)
-	rl.DrawLineEx(rl.NewVector2(scale.X, scale.Y), rl.NewVector2(scale.X, scale.Y+scale.Height), 1, consoleEdge)
-	drawConsoleText(semiboldFont, "ROE", rl.NewRectangle(scale.X, scale.Y-16, scale.Width, 14), 15, color.text)
+func drawSWRScale(graph rl.Rectangle) {
+	const labelWidth = 72
+	left := graph.X - labelWidth - 4
+	drawConsoleText(semiboldFont, "ROE", rl.NewRectangle(left, graph.Y-16, labelWidth, 14), 15, color.text)
 	limits := [...]float64{1, swrThreshold, swrHighThreshold, 3}
 	zones := [...]string{"BAJA", "TOL.", "ALTA"}
 	for i, tint := range swrZoneColors {
 		bottom, top := swrY(graph, limits[i]), swrY(graph, limits[i+1])
-		rl.DrawRectangleRec(rl.NewRectangle(scale.X+1, top, 4, bottom-top), tint)
-		drawConsoleText(semiboldFont, zones[i], rl.NewRectangle(scale.X+7, (top+bottom)/2-9, 52, 18), 13, tint)
+		rl.DrawRectangleRec(rl.NewRectangle(graph.X-5, top, 4, bottom-top), tint)
+		drawConsoleText(semiboldFont, zones[i], rl.NewRectangle(left, (top+bottom)/2-9, labelWidth-8, 18), 13, tint)
 	}
 	for _, ratio := range limits {
 		y := swrY(graph, ratio)
-		rl.DrawLineEx(rl.NewVector2(scale.X+5, y), rl.NewVector2(scale.X+12, y), 1, color.muted)
+		rl.DrawLineEx(rl.NewVector2(graph.X-11, y), rl.NewVector2(graph.X-5, y), 1, color.muted)
+		rl.DrawLineEx(rl.NewVector2(graph.X, y), rl.NewVector2(graph.X+graph.Width, y), 1, consoleEdge)
 		labelY := max(graph.Y, min(graph.Y+graph.Height-18, y-9))
-		drawConsoleText(semiboldFont, swrScaleLabel(ratio), rl.NewRectangle(scale.X+12, labelY, 46, 18), 14, color.text)
+		drawConsoleText(semiboldFont, swrScaleLabel(ratio), rl.NewRectangle(left, labelY, labelWidth-8, 18), 16, color.text)
+	}
+}
+
+func (p *swrPanel) overlay(graph rl.Rectangle, sweep civ.Sweep) {
+	if !p.show || sweep.High <= sweep.Low {
+		return
 	}
 	position := func(point swr.Point) rl.Vector2 {
 		x := graph.X + graph.Width*float32(float64(point.Hz-sweep.Low)/float64(sweep.High-sweep.Low))
@@ -425,7 +427,7 @@ func (p *swrPanel) overlay(graph rl.Rectangle, sweep civ.Sweep) {
 	}
 	for _, saved := range p.history {
 		if completeSWRSweep(saved.Points) {
-			drawSWRPoints(saved.Points, graph, scale.X-2, position)
+			drawSWRPoints(saved.Points, graph, graph.X+graph.Width, position)
 		}
 	}
 }

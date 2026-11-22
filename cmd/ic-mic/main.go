@@ -34,50 +34,49 @@ const (
 )
 
 var color = struct {
-	bg, panel, panel2, border, text, muted, cyan, green, amber, red rl.Color
+	bg, panel, panel2, border, text, muted, signal, green, amber, red rl.Color
 }{
-	rl.NewColor(166, 170, 171, 255), rl.NewColor(8, 19, 24, 255), rl.NewColor(18, 28, 33, 255),
-	rl.NewColor(89, 99, 102, 255), rl.NewColor(246, 248, 248, 255), rl.NewColor(181, 190, 192, 255),
-	rl.NewColor(16, 218, 236, 255), rl.NewColor(54, 230, 119, 255), rl.NewColor(255, 190, 40, 255), rl.NewColor(235, 25, 39, 255),
+	rl.NewColor(8, 8, 9, 255), rl.NewColor(12, 12, 14, 255), rl.NewColor(23, 23, 26, 255),
+	rl.NewColor(80, 80, 85, 255), rl.NewColor(246, 248, 248, 255), rl.NewColor(169, 170, 175, 255),
+	rl.NewColor(111, 227, 112, 255), rl.NewColor(110, 242, 74, 255), rl.NewColor(255, 190, 40, 255), rl.NewColor(240, 38, 56, 255),
 }
 
 var dspColor = struct {
 	text, muted, amber, border rl.Color
 }{
-	rl.NewColor(238, 244, 247, 255), rl.NewColor(169, 192, 202, 255),
-	rl.NewColor(255, 193, 40, 255), rl.NewColor(75, 111, 125, 225),
+	rl.NewColor(241, 241, 243, 255), rl.NewColor(172, 173, 178, 255),
+	rl.NewColor(255, 90, 103, 255), rl.NewColor(82, 82, 88, 225),
 }
 
 var controlColor = struct {
 	well, track, inactive, active, activeEdge, eqLine rl.Color
 }{
-	rl.NewColor(19, 34, 44, 255), rl.NewColor(38, 52, 58, 255), rl.NewColor(52, 69, 77, 255),
-	rl.NewColor(255, 193, 40, 255), rl.NewColor(180, 91, 0, 255), rl.NewColor(31, 205, 220, 255),
+	rl.NewColor(19, 19, 22, 255), rl.NewColor(40, 40, 44, 255), rl.NewColor(52, 52, 57, 255),
+	rl.NewColor(255, 90, 103, 255), rl.NewColor(162, 26, 41, 255), rl.NewColor(239, 240, 241, 255),
 }
 
-// editorColor gives both DSP editors a quiet visual identity without changing
-// the neutral rack finish: RX is green/cyan, TX is warm amber/orange.
+// RX and TX share the same controls, with green and red accents respectively.
 var editorColor = struct {
 	accent, edge, fill, outline rl.Color
 }{
-	accent:  rl.NewColor(255, 193, 40, 255),
-	edge:    rl.NewColor(180, 91, 0, 255),
-	fill:    rl.NewColor(73, 51, 17, 255),
-	outline: rl.NewColor(255, 193, 40, 95),
+	accent:  rl.NewColor(255, 90, 103, 255),
+	edge:    rl.NewColor(162, 26, 41, 255),
+	fill:    rl.NewColor(66, 16, 24, 255),
+	outline: rl.NewColor(255, 90, 103, 95),
 }
 
 func selectEditorColors(mode string) {
 	if mode == "rx" {
-		editorColor.accent = rl.NewColor(54, 224, 142, 255)
-		editorColor.edge = rl.NewColor(12, 132, 103, 255)
-		editorColor.fill = rl.NewColor(18, 68, 55, 255)
-		editorColor.outline = rl.NewColor(54, 224, 142, 95)
+		editorColor.accent = rl.NewColor(121, 231, 101, 255)
+		editorColor.edge = rl.NewColor(52, 118, 47, 255)
+		editorColor.fill = rl.NewColor(25, 57, 26, 255)
+		editorColor.outline = rl.NewColor(121, 231, 101, 95)
 		return
 	}
-	editorColor.accent = rl.NewColor(255, 164, 46, 255)
-	editorColor.edge = rl.NewColor(184, 72, 18, 255)
-	editorColor.fill = rl.NewColor(78, 43, 18, 255)
-	editorColor.outline = rl.NewColor(255, 132, 42, 95)
+	editorColor.accent = rl.NewColor(255, 74, 89, 255)
+	editorColor.edge = rl.NewColor(162, 26, 41, 255)
+	editorColor.fill = rl.NewColor(68, 18, 26, 255)
+	editorColor.outline = rl.NewColor(255, 74, 89, 95)
 }
 
 var regularFont, semiboldFont, militaryFont, displayFont rl.Font
@@ -358,6 +357,7 @@ type app struct {
 	safetyWasMuted          bool
 	voiceOriginalPreview    bool
 	rxWDSP                  *wdsp.Chain
+	localRXAudio            connectedRXAudio
 	signalEditorOpen        bool
 	signalTab               string
 	signalSelected          int
@@ -419,7 +419,8 @@ func main() {
 	rxProcessor := audio.NewProcessor(audio.DefaultSampleRate)
 	a.rxWDSP = wdsp.NewChain(rxProcessor)
 	a.rxWDSP.Configure(a.settings.RXWDSP)
-	rxEngine, err := audioio.New(a.rxWDSP)
+	a.localRXAudio.dsp = a.rxWDSP
+	rxEngine, err := audioio.New(&a.localRXAudio)
 	if err != nil {
 		panic(err)
 	}
@@ -641,9 +642,6 @@ func (a *app) reconnectAudio() {
 	if len(a.inputs) == 0 || len(a.outputs) == 0 {
 		return
 	}
-	if a.mode == "tx" {
-		a.prepareTXPlayback()
-	}
 	if err := a.engine.Start(a.inIndex, a.outIndex); err != nil {
 		a.message, a.radioState = err.Error(), stateError
 		return
@@ -659,6 +657,7 @@ func (a *app) reconnectAudio() {
 		}
 	} else {
 		a.settings.Input, a.settings.Output = a.inputs[a.inIndex].Name, a.outputs[a.outIndex].Name
+		a.prepareTXPlayback()
 		a.txView = a.snapshotView()
 	}
 	a.message = "Audio connected"
@@ -675,7 +674,7 @@ func (a *app) prepareTXPlayback() {
 		return
 	}
 	name := a.outputs[a.outIndex].Name
-	if isRadioUSBCodec(name) {
+	if isConfiguredRadioOutput(name, a.settings.Output) {
 		_ = audioio.PreparePlaybackEndpoint(name)
 	}
 }
@@ -812,7 +811,12 @@ func (a *app) setTX(enabled bool) bool {
 }
 
 func (a *app) update(mouse rl.Vector2) {
+	state, _ := a.radio.snapshot()
+	a.localRXAudio.enabled.Store(!a.settings.RemoteMode && !a.ptt.TX() && radioRXAudioReady(state))
 	a.updateRemoteTX()
+	if a.updateVFOEqualize(mouse, state) {
+		return
+	}
 	if a.radio.txAudio.active.Load() && !rl.IsWindowFocused() {
 		a.stopRemoteTX()
 	}
@@ -1797,7 +1801,11 @@ func (a *app) applyDSPAndSave() {
 }
 
 func (a *app) draw(mouse rl.Vector2) {
-	selectEditorColors(a.mode)
+	profile := "tx"
+	if a.radio.page == pageAudio {
+		profile = a.mode
+	}
+	selectEditorColors(profile)
 	status := a.engine.Status()
 	a.drawNavigation()
 	if a.radio.page != pageAudio {
@@ -1811,8 +1819,8 @@ func (a *app) draw(mouse rl.Vector2) {
 		}
 		return
 	}
-	drawButton(audioProfileRect(0), "TX", a.mode == "tx")
-	drawButton(audioProfileRect(1), "RX", a.mode == "rx")
+	drawAudioProfileButton(audioProfileRect(0), "TX", a.mode == "tx", color.red)
+	drawAudioProfileButton(audioProfileRect(1), "RX", a.mode == "rx", color.green)
 	if a.settings.RemoteMode {
 		a.drawRemoteAudioSelectors(mouse)
 		if a.mode == "rx" {
@@ -1894,15 +1902,15 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 	}
 	visible := min(8, count)
 	panel := rl.NewRectangle(selector.X, 160, selector.Width, float32(visible*44+8))
-	rl.DrawRectangleRounded(panel, .04, 8, rl.NewColor(10, 23, 34, 255))
-	rl.DrawRectangleRoundedLines(panel, .04, 8, color.cyan)
+	rl.DrawRectangleRounded(panel, .04, 8, rl.NewColor(18, 18, 21, 255))
+	rl.DrawRectangleRoundedLines(panel, .04, 8, color.signal)
 	for row := 0; row < visible; row++ {
 		index := a.deviceMenuScroll + row
 		item := rl.NewRectangle(panel.X+4, panel.Y+4+float32(row*44), panel.Width-8, 42)
 		if index == selected {
-			rl.DrawRectangleRounded(item, .08, 5, rl.NewColor(23, 70, 72, 255))
+			rl.DrawRectangleRounded(item, .08, 5, rl.NewColor(56, 20, 28, 255))
 		} else if rl.CheckCollisionPointRec(mouse, item) {
-			rl.DrawRectangleRounded(item, .08, 5, rl.NewColor(27, 46, 61, 255))
+			rl.DrawRectangleRounded(item, .08, 5, rl.NewColor(42, 42, 47, 255))
 		}
 		label := "WINDOWS DEFAULT → " + deviceName(devices, defaultDeviceIndex(devices))
 		if !includeWindowsDefault || index > 0 {
@@ -1917,7 +1925,7 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 		}
 		drawText(ellipsis(label, 58), int32(panel.X+20), int32(item.Y+9), 17, color.text)
 		if index == selected {
-			drawText("✓", int32(panel.X+panel.Width-45), int32(item.Y+8), 18, color.cyan)
+			drawText("✓", int32(panel.X+panel.Width-45), int32(item.Y+8), 18, color.signal)
 		}
 	}
 	if a.deviceMenuScroll > 0 {
@@ -1929,17 +1937,17 @@ func (a *app) drawDeviceMenu(mouse rl.Vector2) {
 }
 
 func drawEngravedPanel(r rl.Rectangle) {
-	fill := rl.NewColor(188, 191, 190, 255)
+	fill := rl.NewColor(19, 19, 22, 255)
 	rl.DrawRectangleRounded(r, .12, 8, fill)
-	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+2), rl.NewVector2(r.X+r.Width-10, r.Y+2), 2, rl.NewColor(245, 247, 246, 175))
+	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+2), rl.NewVector2(r.X+r.Width-10, r.Y+2), 2, rl.NewColor(85, 85, 91, 130))
 	rl.DrawLineEx(rl.NewVector2(r.X+10, r.Y+r.Height-2), rl.NewVector2(r.X+r.Width-10, r.Y+r.Height-2), 2, rl.NewColor(72, 78, 79, 130))
 	rl.DrawRectangleRoundedLines(r, .12, 8, rl.NewColor(103, 108, 109, 185))
 }
 
 func (a *app) drawRXPanel(status audioio.Status) {
 	r := rl.NewRectangle(530, 385, 540, 185)
-	rl.DrawRectangleRounded(r, .25, 16, rl.NewColor(16, 55, 70, 255))
-	stateColor := color.cyan
+	rl.DrawRectangleRounded(r, .25, 16, rl.NewColor(11, 24, 14, 255))
+	stateColor := color.signal
 	if a.radioState == stateError {
 		stateColor = color.red
 	}
@@ -1957,7 +1965,7 @@ func drawSelector(r rl.Rectangle, label, value string, mouse rl.Vector2) {
 	field := rl.NewRectangle(r.X+labelWidth, r.Y+5, r.Width-labelWidth, 54)
 	drawDarkDisplay(field)
 	if rl.CheckCollisionPointRec(mouse, r) {
-		rl.DrawRectangleRoundedLines(field, .18, 8, color.cyan)
+		rl.DrawRectangleRoundedLines(field, .18, 8, color.signal)
 	}
 	drawCenteredFitted(ellipsis(value, 42), rl.NewRectangle(field.X+10, field.Y, field.Width-44, field.Height), 21, color.text)
 	drawText("▼", int32(field.X+field.Width-27), int32(field.Y+17), 17, color.text)
@@ -1973,11 +1981,11 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 	}{{100, "100 Hz"}, {500, "500 Hz"}, {1000, "1 kHz"}, {2000, "2 kHz"}, {3000, "3 kHz"}, {5000, "5 kHz"}, {10000, "10 kHz"}}
 	for _, tick := range frequencyLabels {
 		xx := spectrumFrequencyX(graph, tick.hz)
-		rl.DrawLine(int32(xx), int32(y+18), int32(xx), int32(y+h-22), rl.NewColor(24, 60, 78, 255))
+		rl.DrawLine(int32(xx), int32(y+18), int32(xx), int32(y+h-22), rl.NewColor(40, 40, 45, 255))
 	}
 	for i := 0; i <= 6; i++ {
 		yy := y + 20 + float32(i)*(h-40)/6
-		rl.DrawLine(int32(x+65), int32(yy), int32(x+w-18), int32(yy), rl.NewColor(30, 69, 87, 255))
+		rl.DrawLine(int32(x+65), int32(yy), int32(x+w-18), int32(yy), rl.NewColor(44, 44, 49, 255))
 		drawText(fmt.Sprintf("%d dB", -i*10), int32(x+12), int32(yy-9), 15, color.muted)
 	}
 	a.updateSpectrumDisplay(float32(rl.GetFrameTime()))
@@ -1990,7 +1998,7 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 		xx := graph.X + (float32(i)+.5)*step
 		averageY := spectrumDBY(base, plotHeight, a.spectrumAverage[i])
 		if averageY < base {
-			rl.DrawRectangle(int32(xx-barWidth*.46), int32(averageY), max(2, int32(barWidth*.92)), int32(base-averageY), rl.NewColor(83, 48, 146, 48))
+			rl.DrawRectangle(int32(xx-barWidth*.46), int32(averageY), max(2, int32(barWidth*.92)), int32(base-averageY), rl.NewColor(144, 144, 154, 48))
 		}
 
 		value := max(float32(-60), min(float32(0), a.spectrumDisplay[i]))
@@ -2005,7 +2013,7 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 			rl.DrawRectangle(int32(xx-barWidth/2), int32(segmentY), max(2, int32(barWidth)), int32(segmentHeight), segmentColor)
 		}
 		if value > -60 {
-			rl.DrawRectangle(int32(xx-barWidth*.7), int32(topY-2), max(2, int32(barWidth*1.4)), 4, rl.NewColor(26, 229, 246, 38))
+			rl.DrawRectangle(int32(xx-barWidth*.7), int32(topY-2), max(2, int32(barWidth*1.4)), 4, rl.NewColor(125, 225, 118, 38))
 		}
 
 		peak := max(float32(-60), min(float32(0), a.spectrumPeak[i]))
@@ -2015,10 +2023,10 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 		}
 	}
 	for i := 1; i < len(points); i++ {
-		rl.DrawLineEx(points[i-1], points[i], 6, rl.NewColor(20, 218, 236, 28))
+		rl.DrawLineEx(points[i-1], points[i], 6, rl.NewColor(118, 225, 114, 28))
 	}
 	for i := 1; i < len(points); i++ {
-		rl.DrawLineEx(points[i-1], points[i], 2, rl.NewColor(120, 245, 255, 220))
+		rl.DrawLineEx(points[i-1], points[i], 2, rl.NewColor(225, 246, 224, 220))
 	}
 	for _, tick := range frequencyLabels {
 		xx := spectrumFrequencyX(graph, tick.hz)
@@ -2039,8 +2047,10 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 		rl.DrawRectangle(int32(highX), int32(y+20), int32(max(0, graphX+graphW-highX)), int32(h-42), rl.NewColor(2, 7, 12, 155))
 		rl.DrawLineEx(rl.NewVector2(lowX, y+18), rl.NewVector2(lowX, y+h-22), 4, color.amber)
 		rl.DrawLineEx(rl.NewVector2(highX, y+18), rl.NewVector2(highX, y+h-22), 4, color.amber)
-		drawText(fmt.Sprintf("%.0f Hz", a.config.LowCutHz), int32(lowX+7), int32(y+23), 14, color.amber)
-		drawText(fmt.Sprintf("%.0f Hz", a.config.HighCutHz), int32(highX+7), int32(y+23), 14, color.amber)
+		lowLabel := fmt.Sprintf("%.0f Hz", a.config.LowCutHz)
+		highLabel := fmt.Sprintf("%.0f Hz", a.config.HighCutHz)
+		drawText(lowLabel, int32(lowX+7), int32(y+23), 14, editorColor.accent)
+		drawConsoleText(semiboldFont, highLabel, rl.NewRectangle(highX-80, y+19, 76, 24), 14, editorColor.accent)
 	}
 	if a.mode == "rx" {
 		centerX := spectrumFrequencyX(graph, a.config.Notch.FrequencyHz)
@@ -2052,7 +2062,7 @@ func (a *app) drawSpectrum(x, y, w, h float32) {
 		}
 		rl.DrawRectangle(int32(leftX), int32(y+20), max(1, int32(rightX-leftX)), int32(h-42), rl.NewColor(220, 42, 55, fillAlpha))
 		for hatchX := leftX; hatchX <= rightX; hatchX += 8 {
-			rl.DrawLine(int32(hatchX), int32(y+20), int32(hatchX), int32(y+h-22), rl.NewColor(255, 126, 50, fillAlpha))
+			rl.DrawLine(int32(hatchX), int32(y+20), int32(hatchX), int32(y+h-22), rl.NewColor(255, 89, 104, fillAlpha))
 		}
 		rl.DrawLineEx(rl.NewVector2(leftX, y+18), rl.NewVector2(leftX, y+h-22), 3, rl.NewColor(color.amber.R, color.amber.G, color.amber.B, lineAlpha))
 		rl.DrawLineEx(rl.NewVector2(rightX, y+18), rl.NewVector2(rightX, y+h-22), 3, rl.NewColor(color.amber.R, color.amber.G, color.amber.B, lineAlpha))
@@ -2111,7 +2121,7 @@ func spectrumSegmentColor(db float32) rl.Color {
 	case db >= -40:
 		return rl.NewColor(52, 230, 105, 245)
 	default:
-		return rl.NewColor(20, 218, 236, 240)
+		return rl.NewColor(87, 155, 92, 240)
 	}
 }
 
@@ -2119,7 +2129,7 @@ func (a *app) drawEmphasisCurve(graph rl.Rectangle) {
 	if !a.settings.RXEmphasis {
 		return
 	}
-	curveColor := rl.NewColor(191, 112, 255, 245)
+	curveColor := rl.NewColor(187, 209, 190, 245)
 	baseline := graph.Y + graph.Height*.42
 	var previous rl.Vector2
 	for i := 0; i <= 80; i++ {
@@ -2166,7 +2176,7 @@ func drawMonitorButton(r rl.Rectangle, enabled bool) {
 		fill, border = rl.NewColor(190, 17, 31, 255), rl.NewColor(255, 73, 84, 255)
 		for i := 4; i >= 1; i-- {
 			expand := float32(i * 2)
-			rl.DrawRectangleRounded(rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2), .2, 8, rl.NewColor(235, 25, 39, uint8(8+i*4)))
+			rl.DrawRectangleRounded(rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2), .2, 8, rl.NewColor(240, 38, 56, uint8(8+i*4)))
 		}
 	}
 	rl.DrawRectangleRounded(r, .2, 8, fill)
@@ -2179,13 +2189,13 @@ func drawMeter(x, y, w, h float32, label string, db float32) {
 	drawInsetPanel(r, .09)
 	drawText(label, int32(x+25), int32(y+22), 28, color.text)
 	bar := rl.NewRectangle(x+25, y+88, w-50, 46)
-	rl.DrawRectangleRounded(bar, .15, 6, rl.NewColor(8, 15, 22, 255))
+	rl.DrawRectangleRounded(bar, .15, 6, rl.NewColor(11, 11, 14, 255))
 	norm := float32(math.Max(0, math.Min(1, float64((db+60)/60))))
 	for i := 0; i < 30; i++ {
 		xx := bar.X + 7 + float32(i)*(bar.Width-14)/30
 		c := meterGradient(float32(i) / 29)
 		if float32(i)/30 > norm {
-			c = rl.NewColor(48, 60, 69, 255)
+			c = rl.NewColor(48, 48, 53, 255)
 		}
 		rl.DrawRectangle(int32(xx), int32(bar.Y+8), int32((bar.Width-20)/32), int32(bar.Height-16), c)
 	}
@@ -2198,7 +2208,7 @@ func meterGradient(position float32) rl.Color {
 		at    float32
 		color rl.Color
 	}{
-		{0, rl.NewColor(0, 224, 238, 255)},
+		{0, rl.NewColor(72, 165, 80, 255)},
 		{.24, rl.NewColor(28, 232, 129, 255)},
 		{.56, rl.NewColor(91, 235, 48, 255)},
 		{.78, rl.NewColor(230, 235, 32, 255)},
@@ -2218,7 +2228,7 @@ func meterGradient(position float32) rl.Color {
 func (a *app) drawPersistentTXGain() {
 	r := txGainPanelRectangle()
 	drawInsetPanel(r, .08)
-	rl.DrawRectangleRoundedLines(r, .08, 8, color.cyan)
+	rl.DrawRectangleRoundedLines(r, .08, 8, editorColor.edge)
 	drawText("GANANCIA TX", int32(r.X+24), int32(r.Y+23), 22, color.text)
 	value := rl.NewRectangle(r.X+r.Width-150, r.Y+16, 125, 40)
 	drawControlValue(value, fmt.Sprintf("%+.1f dB", a.config.OutputGainDB))
@@ -2246,8 +2256,8 @@ func (a *app) radioStateLabel() string {
 func (a *app) drawPTTSettings(mouse rl.Vector2) {
 	rl.DrawRectangle(0, 0, viewW, viewH, rl.NewColor(0, 0, 0, 190))
 	panel := rl.NewRectangle(400, 200, 800, 590)
-	rl.DrawRectangleRounded(panel, .05, 12, rl.NewColor(15, 29, 41, 255))
-	rl.DrawRectangleRoundedLines(panel, .05, 12, color.cyan)
+	rl.DrawRectangleRounded(panel, .05, 12, rl.NewColor(19, 19, 23, 255))
+	rl.DrawRectangleRoundedLines(panel, .05, 12, color.signal)
 	drawText("PTT SETTINGS", 450, 235, 30, color.text)
 	drawButton(rl.NewRectangle(1125, 225, 45, 45), "X", false)
 	drawText("KEYBOARD SHORTCUT", 500, 295, 18, color.muted)
@@ -2270,19 +2280,19 @@ func (a *app) drawPTTSettings(mouse rl.Vector2) {
 func drawModeCard(r rl.Rectangle, title, description string, selected bool, mouse rl.Vector2) {
 	fill := color.panel2
 	if selected {
-		fill = rl.NewColor(22, 74, 70, 255)
+		fill = rl.NewColor(67, 19, 28, 255)
 	} else if rl.CheckCollisionPointRec(mouse, r) {
-		fill = rl.NewColor(28, 48, 63, 255)
+		fill = rl.NewColor(35, 35, 39, 255)
 	}
 	rl.DrawRectangleRounded(r, .12, 8, fill)
 	border := color.border
 	if selected {
-		border = color.cyan
+		border = color.signal
 	}
 	rl.DrawRectangleRoundedLines(r, .12, 8, border)
 	rl.DrawCircle(int32(r.X+28), int32(r.Y+31), 8, border)
 	if selected {
-		rl.DrawCircle(int32(r.X+28), int32(r.Y+31), 4, color.cyan)
+		rl.DrawCircle(int32(r.X+28), int32(r.Y+31), 4, color.signal)
 	}
 	drawText(title, int32(r.X+48), int32(r.Y+17), 21, color.text)
 	drawWrappedText(description, int32(r.X+20), int32(r.Y+59), int32(r.Width-40), 15, 22, color.muted)
@@ -2322,10 +2332,10 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 		fill := rl.NewColor(27, 31, 32, 255)
 		hovered := rl.CheckCollisionPointRec(mouse, r)
 		if hovered {
-			fill = rl.NewColor(20, 38, 52, 255)
+			fill = rl.NewColor(34, 34, 39, 255)
 		}
 		if active {
-			fill = rl.NewColor(57, 45, 25, 255)
+			fill = editorColor.fill
 			for glow := 5; glow >= 1; glow-- {
 				expand := float32(glow)
 				gr := rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2)
@@ -2339,7 +2349,7 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 		if active {
 			border = editorColor.accent
 		} else if hovered {
-			border = rl.NewColor(105, 128, 143, 255)
+			border = rl.NewColor(87, 87, 94, 255)
 		}
 		rl.DrawRectangleRoundedLines(r, .22, 10, border)
 		stateColor := color.muted
@@ -2360,7 +2370,7 @@ func (a *app) drawTabs(mouse rl.Vector2) {
 
 func (a *app) drawDSPPanel() {
 	r := rl.NewRectangle(35, 650, 1530, 210)
-	drawMetalControlPanel(r)
+	drawControlPanel(r)
 	// A fine outer keyline identifies which independent profile is being
 	// edited, even when every control in the current section is disabled.
 	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+3, r.Y+3, r.Width-6, r.Height-6), .04, 8, editorColor.outline)
@@ -2483,7 +2493,7 @@ func (a *app) drawRXEmphasisControls() {
 }
 
 func drawCompactSlider(track rl.Rectangle, percent float64) {
-	drawCompactSliderColor(track, percent, rl.NewColor(191, 112, 255, 255))
+	drawCompactSliderColor(track, percent, rl.NewColor(187, 209, 190, 255))
 }
 
 func drawCompactSliderColor(track rl.Rectangle, percent float64, active rl.Color) {
@@ -2496,11 +2506,11 @@ func (a *app) drawEQ() {
 	drawRecessedControlWell(rl.NewRectangle(42, 700, 1518, 132), true)
 	for _, frequency := range []float64{100, 500, 1000, 2000, 5000, 10000} {
 		x := spectrumFrequencyX(graph, frequency)
-		rl.DrawLine(int32(x), int32(graph.Y), int32(x), int32(graph.Y+graph.Height), rl.NewColor(37, 74, 83, 215))
+		rl.DrawLine(int32(x), int32(graph.Y), int32(x), int32(graph.Y+graph.Height), rl.NewColor(57, 57, 62, 215))
 	}
 	for i := 0; i <= 4; i++ {
 		y := graph.Y + float32(i)*graph.Height/4
-		rl.DrawLine(int32(graph.X), int32(y), int32(graph.X+graph.Width), int32(y), rl.NewColor(42, 70, 76, 220))
+		rl.DrawLine(int32(graph.X), int32(y), int32(graph.X+graph.Width), int32(y), rl.NewColor(48, 48, 53, 220))
 		label := fmt.Sprintf("%+d dB", 12-i*6)
 		labelSize := readableSize(15)
 		labelWidth := rl.MeasureTextEx(interfaceFont(labelSize), label, float32(labelSize), fontSpacing(labelSize)).X
@@ -2660,7 +2670,7 @@ func (a *app) drawGlobalPresetModal() {
 	}
 	rl.DrawRectangle(0, 0, viewW, viewH, rl.NewColor(0, 0, 0, 195))
 	panel := rl.NewRectangle(480, 255, 640, 415)
-	rl.DrawRectangleRounded(panel, .06, 12, rl.NewColor(15, 29, 41, 255))
+	rl.DrawRectangleRounded(panel, .06, 12, rl.NewColor(19, 19, 23, 255))
 	rl.DrawRectangleRoundedLines(panel, .06, 12, color.amber)
 	drawText("SAVE GLOBAL PRESET", 525, 295, 28, color.text)
 	drawButton(rl.NewRectangle(1060, 277, 45, 45), "X", false)
@@ -2704,8 +2714,8 @@ func drawRecessedControlWell(r rl.Rectangle, dark bool) {
 	fill := controlColor.well
 	upper, lower := rl.NewColor(72, 80, 82, 170), rl.NewColor(245, 247, 246, 180)
 	if dark {
-		fill = rl.NewColor(22, 34, 39, 255)
-		upper, lower = rl.NewColor(3, 7, 9, 220), rl.NewColor(115, 137, 141, 120)
+		fill = rl.NewColor(21, 21, 24, 255)
+		upper, lower = rl.NewColor(3, 7, 9, 220), rl.NewColor(84, 84, 90, 120)
 	}
 	rl.DrawRectangleRounded(rl.NewRectangle(r.X+1, r.Y+3, r.Width, r.Height), .12, 8, rl.NewColor(255, 255, 255, 85))
 	rl.DrawRectangleRounded(r, .12, 8, fill)
@@ -2758,7 +2768,7 @@ func drawButton(r rl.Rectangle, label string, active bool) {
 		for glow := 5; glow >= 1; glow-- {
 			expand := float32(glow * 2)
 			glowRect := rl.NewRectangle(r.X-expand, r.Y-expand, r.Width+expand*2, r.Height+expand*2)
-			rl.DrawRectangleRounded(glowRect, .18, 8, rl.NewColor(editorColor.accent.R, editorColor.accent.G, editorColor.accent.B, uint8(6+glow*6)))
+			rl.DrawRectangleRounded(glowRect, .18, 8, rl.NewColor(editorColor.accent.R, editorColor.accent.G, editorColor.accent.B, uint8(2+glow*2)))
 		}
 	}
 	rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+4, r.Width, r.Height), .18, 6, rl.NewColor(3, 5, 6, 180))
@@ -2886,6 +2896,14 @@ func isLoopbackDevice(name string) bool {
 
 func isRadioUSBCodec(name string) bool {
 	return strings.Contains(normalizedDeviceName(name), "usb audio codec")
+}
+
+func isConfiguredRadioOutput(activeOutput, configuredOutput string) bool {
+	// Windows can expose the MK2 under a generic name, so require it to
+	// match the configured TX route before treating it as the radio output.
+	return isRadioUSBCodec(activeOutput) ||
+		strings.EqualFold(activeOutput, configuredOutput) &&
+			strings.Contains(normalizedDeviceName(activeOutput), "usb audio device")
 }
 
 func monitorRouteRisk(txInput, monitorOutput string) string {
@@ -3092,48 +3110,31 @@ func formatEQFrequency(hz float64) string {
 }
 
 func drawConsoleChassis() {
-	rl.DrawRectangleGradientV(0, 0, viewW, viewH, rl.NewColor(27, 42, 50, 255), rl.NewColor(9, 19, 25, 255))
-	rl.DrawRectangleGradientV(0, 0, viewW, 70, rl.NewColor(211, 214, 214, 255), rl.NewColor(137, 142, 144, 255))
-	for y := int32(1); y < 70; y += 3 {
-		shade := uint8(18 + (y%11)*2)
-		rl.DrawLine(0, y, viewW, y, rl.NewColor(255, 255, 255, shade))
+	rl.DrawRectangleGradientV(0, 0, viewW, viewH, rl.NewColor(18, 18, 21, 255), color.bg)
+	rl.DrawRectangle(0, 0, viewW, 70, rl.NewColor(10, 10, 12, 255))
+	for x := int32(70); x < viewW; x += 12 {
+		rl.DrawLine(x-59, 59, x, 0, rl.NewColor(25, 25, 28, 255))
 	}
-	for y := int32(2); y < 70; y += 7 {
-		rl.DrawLine(0, y, viewW, y, rl.NewColor(45, 49, 50, 18))
+	rl.DrawRectangleLinesEx(rl.NewRectangle(1, 1, viewW-2, viewH-2), 1, consoleEdge)
+	rail := [...]rl.Vector2{{X: 0, Y: 69}, {X: 507, Y: 69}, {X: 529, Y: 59}, {X: viewW, Y: 59}}
+	for i := 1; i < len(rail); i++ {
+		rl.DrawLineEx(rail[i-1], rail[i], 2, color.red)
 	}
-	rl.DrawRectangleLinesEx(rl.NewRectangle(1, 1, viewW-2, viewH-2), 2, rl.NewColor(74, 104, 116, 255))
-	rl.DrawLine(0, 70, viewW, 70, rl.NewColor(83, 155, 172, 255))
 }
 
 func drawDarkDisplay(r rl.Rectangle) {
 	rl.DrawRectangleRounded(rl.NewRectangle(r.X+2, r.Y+4, r.Width, r.Height), .18, 8, rl.NewColor(25, 27, 28, 150))
-	rl.DrawRectangleRounded(r, .18, 8, rl.NewColor(8, 15, 18, 255))
-	rl.DrawRectangleRoundedLines(r, .18, 8, rl.NewColor(48, 53, 55, 255))
-	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), .18, 8, rl.NewColor(185, 193, 194, 100))
-	rl.DrawLineEx(rl.NewVector2(r.X+12, r.Y+5), rl.NewVector2(r.X+r.Width-12, r.Y+5), 2, rl.NewColor(222, 231, 231, 65))
+	rl.DrawRectangleRounded(r, .12, 8, color.bg)
+	rl.DrawRectangleRoundedLines(r, .12, 8, color.border)
 }
 
 func drawInsetPanel(r rl.Rectangle, roundness float32) {
-	rl.DrawRectangleRounded(rl.NewRectangle(r.X-3, r.Y-3, r.Width+6, r.Height+8), roundness, 8, rl.NewColor(65, 69, 70, 160))
 	rl.DrawRectangleRounded(r, roundness, 8, color.panel)
-	rl.DrawRectangleRoundedLines(r, roundness, 8, rl.NewColor(42, 49, 52, 255))
-	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), roundness, 8, rl.NewColor(130, 141, 143, 90))
+	rl.DrawRectangleRoundedLines(r, roundness, 8, color.border)
 }
 
-func drawMetalControlPanel(r rl.Rectangle) {
-	rl.DrawRectangleRounded(rl.NewRectangle(r.X-3, r.Y-3, r.Width+6, r.Height+7), .04, 8, rl.NewColor(61, 65, 66, 155))
-	// Scissor rectangles use physical screen coordinates and therefore do not
-	// follow the virtual 1600x900 camera when the window is resized. Drawing the
-	// panel directly keeps its bounds stable at every window scale.
-	rl.DrawRectangleRounded(r, .04, 8, rl.NewColor(20, 34, 43, 255))
-	for y := int32(r.Y) + 2; y < int32(r.Y+r.Height); y += 3 {
-		rl.DrawLine(int32(r.X+2), y, int32(r.X+r.Width-2), y, rl.NewColor(255, 255, 255, 5))
-	}
-	for y := int32(r.Y) + 4; y < int32(r.Y+r.Height); y += 8 {
-		rl.DrawLine(int32(r.X+2), y, int32(r.X+r.Width-2), y, rl.NewColor(40, 44, 45, 13))
-	}
-	rl.DrawRectangleRoundedLines(r, .04, 8, rl.NewColor(55, 60, 61, 255))
-	rl.DrawRectangleRoundedLines(rl.NewRectangle(r.X+2, r.Y+2, r.Width-4, r.Height-4), .04, 8, rl.NewColor(232, 234, 233, 150))
+func drawControlPanel(r rl.Rectangle) {
+	drawCutPanel(r, 7, color.panel2, consoleEdge, 1)
 }
 
 func (a *app) shortcutLabel() string {

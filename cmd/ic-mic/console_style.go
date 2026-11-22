@@ -8,11 +8,24 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-var consoleEdge = rl.NewColor(75, 159, 178, 255)
+var consoleEdge = rl.NewColor(75, 75, 82, 255)
+
+func drawCutPanel(r rl.Rectangle, cut float32, fill, edge rl.Color, thickness float32) {
+	x, y := r.X, r.Y
+	right, bottom := x+r.Width, y+r.Height
+	vertices := [...]rl.Vector2{
+		{X: x + cut, Y: y}, {X: x, Y: y + cut}, {X: x, Y: bottom},
+		{X: right - cut, Y: bottom}, {X: right, Y: bottom - cut}, {X: right, Y: y},
+	}
+	rl.DrawTriangleFan(vertices[:], fill)
+	for i := range vertices {
+		rl.DrawLineEx(vertices[i], vertices[(i+1)%len(vertices)], thickness, edge)
+	}
+}
 
 func drawConsolePanel(r rl.Rectangle, edge rl.Color) {
 	radius := min(.24, 24/min(r.Width, r.Height))
-	rl.DrawRectangleRounded(r, radius, 10, rl.NewColor(6, 19, 26, 255))
+	rl.DrawRectangleRounded(r, radius, 10, rl.NewColor(13, 13, 16, 255))
 	rl.DrawRectangleRoundedLinesEx(r, radius, 10, 1.6, edge)
 }
 
@@ -31,16 +44,31 @@ func drawConsoleButton(r rl.Rectangle, label string, active, primary bool) {
 	drawConsoleButtonSize(r, label, active, primary, 20)
 }
 
+func drawAudioProfileButton(rect rl.Rectangle, label string, selected bool, accent rl.Color) {
+	fill := mix(color.panel, accent, .17)
+	border := mix(color.panel, accent, .70)
+	shade := mix(color.text, accent, .45)
+	if selected {
+		fill = mix(color.panel, accent, .32)
+		border, shade = accent, color.text
+	}
+	drawCutPanel(rect, 6, fill, border, 1.5)
+	if selected {
+		rl.DrawRectangleRec(rl.NewRectangle(rect.X+9, rect.Y+rect.Height-5, rect.Width-18, 3), accent)
+	}
+	drawConsoleText(semiboldFont, label, rect, 22, shade)
+}
+
 func drawConsoleButtonSize(r rl.Rectangle, label string, active, primary bool, size float32) {
-	fill := rl.NewColor(11, 26, 33, 255)
-	border := rl.NewColor(114, 143, 154, 255)
+	fill := rl.NewColor(23, 23, 27, 255)
+	border := rl.NewColor(92, 92, 99, 255)
 	shade := color.text
 	if primary {
-		border = color.cyan
+		border = color.red
 	}
 	if active {
-		border, shade = color.amber, rl.NewColor(255, 224, 160, 255)
-		fill = rl.NewColor(63, 38, 9, 255)
+		border, shade = color.red, color.text
+		fill = rl.NewColor(69, 18, 27, 255)
 	}
 	rl.DrawRectangleRounded(r, .22, 8, fill)
 	rl.DrawRectangleRoundedLinesEx(r, .22, 8, 1.6, border)
@@ -59,10 +87,10 @@ var rfControls = [...]struct {
 	rect    rl.Rectangle
 	control civ.RXControl
 }{
-	{"P.AMP / ATT", rl.Rectangle{X: 387, Y: 240, Width: 232, Height: 36}, civ.Preamp},
-	{"NOTCH", rl.Rectangle{X: 638, Y: 240, Width: 127, Height: 36}, civ.AutoNotch},
-	{"NB", rl.Rectangle{X: 788, Y: 240, Width: 83, Height: 36}, civ.NoiseBlanker},
-	{"NR", rl.Rectangle{X: 894, Y: 240, Width: 83, Height: 36}, civ.NoiseReduction},
+	{"P.AMP / ATT", rl.Rectangle{X: 673, Y: 240, Width: 126, Height: 36}, civ.Preamp},
+	{"NOTCH", rl.Rectangle{X: 804, Y: 240, Width: 77, Height: 36}, civ.AutoNotch},
+	{"NB", rl.Rectangle{X: 886, Y: 240, Width: 43, Height: 36}, civ.NoiseBlanker},
+	{"NR", rl.Rectangle{X: 934, Y: 240, Width: 44, Height: 36}, civ.NoiseReduction},
 }
 
 func drawVFOButtons(state civ.State, online bool) {
@@ -71,8 +99,32 @@ func drawVFOButtons(state civ.State, online bool) {
 		if i == 2 {
 			active = online && time.Since(state.VFOEqualizedAt) < 950*time.Millisecond
 		}
-		drawConsoleButton(vfoControls[i], label, active, false)
+		if !active || i == 2 {
+			drawRFOption(vfoControls[i], label, active)
+			continue
+		}
+		shade := color.green
+		if i == 1 {
+			shade = rl.NewColor(104, 190, 255, 255)
+		}
+		rect := vfoControls[i]
+		rl.DrawRectangleRounded(rect, .22, 8, shade)
+		drawConsoleText(semiboldFont, label, rect, 20, color.bg)
 	}
+}
+
+func drawRFOption(rect rl.Rectangle, label string, active bool) {
+	drawRFOptionSize(rect, label, active, 20)
+}
+
+func drawRFOptionSize(rect rl.Rectangle, label string, active bool, size float32) {
+	if !active {
+		drawConsoleButtonSize(rect, label, false, false, size)
+		return
+	}
+	rl.DrawRectangleRounded(rect, .22, 8, rl.White)
+	rl.DrawRectangleRoundedLinesEx(rect, .22, 8, 1.6, rl.White)
+	drawConsoleText(semiboldFont, label, rect, size, color.bg)
 }
 
 func drawRXButtons(state civ.State, online bool) {
@@ -95,19 +147,20 @@ func drawRXButtons(state civ.State, online bool) {
 				label += "   OFF"
 			}
 		}
-		drawConsoleButton(control.rect, label, active, false)
+		drawRFOption(control.rect, label, active)
 	}
 }
 
 func (a *app) updateRadioButtons(mouse rl.Vector2, state civ.State) bool {
 	for i, rect := range vfoControls {
 		if clicked(mouse, rect) {
+			a.radio.wheel = wheelTuning{}
 			if a.radio.initialVFOPending {
 				a.message = "Esperando confirmación de VFO A"
 				return true
 			}
 			if i == 2 {
-				a.radio.session.EqualizeVFO()
+				a.radio.confirmVFOEqualize = true
 			} else {
 				a.radio.session.SelectVFO(byte(i))
 			}
@@ -150,8 +203,8 @@ func (a *app) updateRadioButtons(mouse rl.Vector2, state civ.State) bool {
 
 func (a *app) drawConsolePTT(mouse rl.Vector2, transmitting bool, startedAt time.Time) {
 	r := operationPTT()
-	accent := color.cyan
-	fill := rl.NewColor(13, 40, 53, 255)
+	accent := color.red
+	fill := rl.NewColor(34, 13, 18, 255)
 	label := "PTT"
 	hint := "MANTENER"
 	if a.settings.PTTMode == "lock" {
@@ -168,7 +221,7 @@ func (a *app) drawConsolePTT(mouse rl.Vector2, transmitting bool, startedAt time
 		hint = "CONECTA EL PTT EN CFG"
 	}
 	if transmitting {
-		accent, fill = color.red, rl.NewColor(75, 20, 27, 255)
+		accent, fill = color.red, rl.NewColor(129, 20, 35, 255)
 		label, hint = "TX", ""
 		if !startedAt.IsZero() {
 			hint = time.Since(startedAt).Truncate(time.Second).String()
@@ -177,8 +230,7 @@ func (a *app) drawConsolePTT(mouse rl.Vector2, transmitting bool, startedAt time
 	if rl.CheckCollisionPointRec(mouse, r) {
 		fill = mix(fill, rl.White, .08)
 	}
-	rl.DrawRectangleRounded(r, .23, 10, fill)
-	rl.DrawRectangleRoundedLinesEx(r, .23, 10, 3.5, accent)
+	drawCutPanel(r, 18, fill, accent, 3)
 	drawMilitaryCentered(label, rl.NewRectangle(r.X+12, r.Y, 188, r.Height), 67, color.text, 0)
 	lineX := r.X + 205
 	rl.DrawLineEx(rl.NewVector2(lineX, r.Y+28), rl.NewVector2(lineX, r.Y+r.Height-28), 1, consoleEdge)

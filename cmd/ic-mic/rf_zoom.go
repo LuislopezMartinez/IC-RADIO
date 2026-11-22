@@ -82,7 +82,7 @@ func (z *rfVerticalZoom) update(mouse rl.Vector2) bool {
 func (z *rfVerticalZoom) draw() {
 	drawConsoleText(semiboldFont, "ZOOM Y", rl.NewRectangle(983, 240, 78, 36), 17, color.muted)
 	drawConsoleButton(zoomControls[0], "-", false, false)
-	drawConsoleButton(zoomControls[1], fmt.Sprintf("x%.1f", z.factor()), z.index != 0, false)
+	drawRFOption(zoomControls[1], fmt.Sprintf("x%.1f", z.factor()), z.index != 0)
 	drawConsoleButton(zoomControls[2], "+", false, false)
 }
 
@@ -94,7 +94,7 @@ func (z *rfVerticalZoom) drawGrid(graph rl.Rectangle) {
 	}
 	for db := float32(math.Ceil(float64(bottom/step))) * step; db <= top; db += step {
 		y := graph.Y + graph.Height*(top-db)/(top-bottom)
-		rl.DrawLineEx(rl.NewVector2(graph.X, y), rl.NewVector2(graph.X+graph.Width, y), 1, rl.NewColor(28, 62, 77, 255))
+		rl.DrawLineEx(rl.NewVector2(graph.X, y), rl.NewVector2(graph.X+graph.Width, y), 1, rl.NewColor(44, 44, 49, 255))
 		drawConsoleText(semiboldFont, fmt.Sprintf("%.0f dB", db), rl.NewRectangle(21, y-11, 74, 22), 18, color.text)
 	}
 }

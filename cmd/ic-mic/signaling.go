@@ -550,8 +550,8 @@ func (a *app) drawSignalEditor(mouse rl.Vector2) {
 	}
 	drawText(sequenceHelp, 55, 454, 14, color.amber)
 	track := signalTimelineRect()
-	rl.DrawRectangleRounded(track, .08, 10, rl.NewColor(10, 22, 29, 255))
-	rl.DrawRectangleRoundedLines(track, .08, 10, rl.NewColor(55, 78, 88, 255))
+	rl.DrawRectangleRounded(track, .08, 10, rl.NewColor(14, 14, 17, 255))
+	rl.DrawRectangleRoundedLines(track, .08, 10, rl.NewColor(68, 68, 75, 255))
 	blocks := *a.activeSignalBlocks()
 	for i, block := range blocks {
 		a.drawSignalBlock(signalBlockRect(i, len(blocks)), block, i == a.signalSelected)
@@ -575,7 +575,7 @@ func (a *app) drawSignalEditor(mouse rl.Vector2) {
 	labels := []struct{ kind, label string }{{signalTone, "TONO"}, {signalPause, "PAUSA"}, {signalSweep, "BARRIDO"}, {signalMorse, "MORSE"}}
 	for i, item := range labels {
 		r := signalPaletteRect(i)
-		fill := []rl.Color{color.cyan, rl.NewColor(240, 130, 165, 255), rl.NewColor(178, 112, 238, 255), color.amber}[i]
+		fill := []rl.Color{color.signal, rl.NewColor(198, 198, 202, 255), rl.NewColor(249, 105, 118, 255), color.amber}[i]
 		rl.DrawRectangleRounded(r, .22, 8, fill)
 		drawCentered(item.label, r, 17, rl.NewColor(12, 20, 24, 255), 0)
 	}
@@ -588,26 +588,26 @@ func (a *app) drawSignalEditor(mouse rl.Vector2) {
 	a.drawSignalInspector(mouse, blocks)
 	if a.signalPaletteDrag != "" {
 		r := rl.NewRectangle(mouse.X-60, mouse.Y-25, 120, 50)
-		rl.DrawRectangleRounded(r, .2, 8, rl.NewColor(255, 190, 40, 225))
+		rl.DrawRectangleRounded(r, .2, 8, rl.NewColor(114, 23, 36, 235))
 		drawCentered(strings.ToUpper(a.signalPaletteDrag), r, 16, dspColor.text, 0)
 	}
 }
 
 func (a *app) drawSignalBlock(r rl.Rectangle, block signalBlock, selected bool) {
-	fill := color.cyan
+	fill := color.signal
 	typeLabel, label := "TONO", noteLabel(block.Note)
 	switch block.Type {
 	case signalPause:
-		fill, typeLabel, label = rl.NewColor(236, 130, 163, 255), "PAUSA", durationLabel(block.DurationMS)
+		fill, typeLabel, label = rl.NewColor(198, 198, 202, 255), "PAUSA", durationLabel(block.DurationMS)
 	case signalSweep:
-		fill, typeLabel, label = rl.NewColor(178, 112, 238, 255), "BARRIDO", noteLabel(block.Note)
+		fill, typeLabel, label = rl.NewColor(249, 105, 118, 255), "BARRIDO", noteLabel(block.Note)
 	case signalMorse:
 		fill, typeLabel, label = color.amber, "MORSE", block.Callsign
 	}
 	if selected {
 		for i := 5; i > 0; i-- {
 			e := float32(i * 2)
-			rl.DrawRectangleRounded(rl.NewRectangle(r.X-e, r.Y-e, r.Width+2*e, r.Height+2*e), .18, 8, rl.NewColor(color.cyan.R, color.cyan.G, color.cyan.B, uint8(12+i*5)))
+			rl.DrawRectangleRounded(rl.NewRectangle(r.X-e, r.Y-e, r.Width+2*e, r.Height+2*e), .18, 8, rl.NewColor(color.signal.R, color.signal.G, color.signal.B, uint8(12+i*5)))
 		}
 	}
 	rl.DrawRectangleRounded(r, .18, 8, fill)
@@ -628,7 +628,7 @@ func durationLabel(ms float64) string {
 
 func (a *app) drawSignalInspector(mouse rl.Vector2, blocks []signalBlock) {
 	r := signalInspectorRect()
-	rl.DrawRectangleRounded(r, .04, 8, rl.NewColor(225, 229, 227, 255))
+	rl.DrawRectangleRounded(r, .04, 8, rl.NewColor(20, 20, 23, 255))
 	rl.DrawRectangleRoundedLines(r, .04, 8, dspColor.border)
 	drawText("EDITAR BLOQUE", 1158, 470, 23, dspColor.text)
 	if a.signalSelected < 0 || a.signalSelected >= len(blocks) {
@@ -652,17 +652,17 @@ func (a *app) drawSignalInspector(mouse rl.Vector2, blocks []signalBlock) {
 			selected := block.Note == a.signalPianoBase+(white/7)*12+whiteOffsets[white%7]
 			fill := rl.NewColor(248, 248, 241, 255)
 			if selected {
-				fill = color.amber
+				fill = color.red
 			}
 			rl.DrawRectangleRounded(key, .04, 3, fill)
 			rl.DrawRectangleRoundedLines(key, .04, 3, dspColor.border)
-			drawCentered(whiteNotes[white%7], key, 8, dspColor.text, 35)
+			drawCentered(whiteNotes[white%7], key, 8, color.bg, 35)
 		}
 		for _, black := range signalPianoBlackKeys() {
 			selected := block.Note == a.signalPianoBase+black.offset
-			fill := rl.NewColor(19, 28, 33, 255)
+			fill := rl.NewColor(22, 22, 25, 255)
 			if selected {
-				fill = color.amber
+				fill = color.red
 			}
 			rl.DrawRectangleRounded(black.rect, .05, 3, fill)
 			drawCentered(black.label, black.rect, 8, color.text, 18)
@@ -670,9 +670,9 @@ func (a *app) drawSignalInspector(mouse rl.Vector2, blocks []signalBlock) {
 	}
 	if block.Type == signalMorse {
 		field := rl.NewRectangle(1158, 724, 374, 40)
-		fill := rl.NewColor(236, 239, 237, 255)
+		fill := rl.NewColor(26, 26, 30, 255)
 		if a.signalEditingCallsign {
-			fill = rl.NewColor(255, 226, 150, 255)
+			fill = rl.NewColor(72, 20, 30, 255)
 		}
 		rl.DrawRectangleRounded(field, .1, 5, fill)
 		rl.DrawRectangleRoundedLines(field, .1, 5, dspColor.border)
@@ -690,7 +690,7 @@ func (a *app) drawSignalInspector(mouse rl.Vector2, blocks []signalBlock) {
 			style = "sine"
 		}
 		group := rl.NewRectangle(1153, 654, 384, 62)
-		rl.DrawRectangleRounded(group, .06, 5, rl.NewColor(202, 207, 205, 255))
+		rl.DrawRectangleRounded(group, .06, 5, rl.NewColor(25, 25, 29, 255))
 		rl.DrawRectangleRoundedLines(group, .06, 5, dspColor.border)
 		drawText("TIPO DE TONO", 1163, 659, 11, dspColor.muted)
 		for i, item := range []struct{ key, label string }{{"sine", "SENOIDAL"}, {"square", "CUADRADA"}, {"triangle", "TRIANGULAR"}} {

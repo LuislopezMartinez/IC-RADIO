@@ -36,3 +36,21 @@ func TestSWRZones(t *testing.T) {
 		}
 	}
 }
+
+func TestSWRRadioOutputNames(t *testing.T) {
+	const mk2 = "Altavoces (USB Audio Device)"
+	for _, tc := range []struct {
+		active, configured string
+		want               bool
+	}{
+		{"Altavoces (USB Audio CODEC)", "", true},
+		{mk2, mk2, true},
+		{mk2, "", false},
+		{mk2, "Salida anterior", false},
+		{"Auriculares USB", "Auriculares USB", false},
+	} {
+		if got := isConfiguredRadioOutput(tc.active, tc.configured); got != tc.want {
+			t.Errorf("active %q, configured %q: got %v, want %v", tc.active, tc.configured, got, tc.want)
+		}
+	}
+}

@@ -19,14 +19,13 @@ void main() {
     float shown = 160.0 * (plot.x - plotY) / plot.y;
     float level = plot.w + (shown - plot.w) / plot.z;
     float contrastDb = max(0.0, (level - plot.w) * 0.5);
-    vec3 cool = vec3(0.30, 0.44, 0.54);
-    vec3 teal = vec3(0.24, 0.71, 0.81);
-    vec3 warm = vec3(0.98, 0.65, 0.26);
-    vec3 hot = vec3(0.96, 0.36, 0.17);
-    vec3 tint = mix(cool, teal, smoothstep(0.0, 9.0, contrastDb));
-    tint = mix(tint, warm, smoothstep(7.0, 20.0, contrastDb));
-    tint = mix(tint, hot, smoothstep(22.0, 37.0, contrastDb));
-    finalColor = vec4(tint, 0.64);
+    float elevation = clamp(shown / 160.0, 0.0, 1.0);
+    vec3 lowerTint = vec3(0.18, 0.31, 0.28);
+    vec3 traceTint = vec3(0.54, 0.69, 0.63);
+    float rise = max(smoothstep(0.0, 0.58, elevation),
+                     smoothstep(0.0, 30.0, contrastDb));
+    vec3 tint = mix(lowerTint, traceTint, rise);
+    finalColor = vec4(tint, mix(0.24, 0.64, rise));
 }`
 
 type rfFillGradient struct {
@@ -42,7 +41,7 @@ func (g *rfFillGradient) draw(points []rl.Vector2, graph rl.Rectangle, zoom rfVe
 		g.location = rl.GetShaderLocation(g.shader, "plot")
 	}
 	if g.location < 0 {
-		rl.DrawTriangleStrip(points, rl.NewColor(124, 157, 167, 135))
+		rl.DrawTriangleStrip(points, rl.NewColor(91, 133, 117, 88))
 		return
 	}
 	rl.SetShaderValue(g.shader, g.location, []float32{graph.Y + graph.Height, graph.Height, zoom.factor(), zoom.floor}, rl.ShaderUniformVec4)

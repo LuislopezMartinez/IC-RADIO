@@ -1,70 +1,68 @@
 package main
 
 import (
-	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
 	"math"
 	"time"
-)
 
-type rfBin struct{ level, pending float32 }
+	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
+)
 
 type rfEnvelope struct {
 	low, high     int64
 	at, lastSweep time.Time
-	attack        time.Duration
-	bins          [civ.Samples]rfBin
+	interval      time.Duration
+	transitionAt  time.Time
+	transition    time.Duration
+	from          [civ.Samples]float32
+	target        [civ.Samples]byte
+	levels        [civ.Samples]float32
 	peakLevels    [civ.Samples]float32
-	peakTargets   [civ.Samples]float32
 }
 
 func (e *rfEnvelope) update(sweep civ.Sweep, peaks [civ.Samples]byte, now time.Time) {
 	if e.at.IsZero() || e.low != sweep.Low || e.high != sweep.High {
-		*e = rfEnvelope{low: sweep.Low, high: sweep.High, at: now, attack: 260 * time.Millisecond}
-		for i, raw := range sweep.Levels {
-			e.bins[i].level = float32(raw)
-			e.peakLevels[i] = float32(raw)
+		*e = rfEnvelope{
+			low: sweep.Low, high: sweep.High, at: now, lastSweep: sweep.At,
+			target: sweep.Levels,
 		}
+		for i, raw := range sweep.Levels {
+			e.levels[i] = float32(raw)
+			e.peakLevels[i] = float32(max(raw, peaks[i]))
+		}
+		return
 	}
-	if sweep.At.After(e.lastSweep) {
+	newSweep := sweep.At.After(e.lastSweep)
+	progress := float32(1)
+	if e.transition > 0 {
+		progress = max(0, min(1, float32(now.Sub(e.transitionAt))/float32(e.transition)))
+	}
+	if newSweep {
 		if !e.lastSweep.IsZero() {
-			interval := max(210*time.Millisecond, min(650*time.Millisecond, sweep.At.Sub(e.lastSweep)))
-			e.attack = (3*e.attack + interval) / 4
+			interval := sweep.At.Sub(e.lastSweep)
+			if e.interval == 0 {
+				e.interval = interval
+			} else {
+				e.interval = (3*e.interval + interval) / 4
+			}
 		}
 		e.lastSweep = sweep.At
 	}
 	dt := now.Sub(e.at)
-	rise := float32(-math.Expm1(-2 * float64(dt) / float64(e.attack)))
-	fall := float32(-math.Expm1(-float64(dt) / float64(240*time.Millisecond)))
-	peakRise := float32(-math.Expm1(-float64(dt) / float64(105*time.Millisecond)))
 	peakFall := float32(-math.Expm1(-float64(dt) / float64(900*time.Millisecond)))
 	for i, raw := range sweep.Levels {
-		bin := &e.bins[i]
+		e.levels[i] = e.from[i] + (float32(e.target[i])-e.from[i])*progress
+		if newSweep {
+			// Start at the position already displayed, even if another
+			// sweep arrived before the previous transition had finished.
+			e.from[i], e.target[i] = e.levels[i], raw
+		}
 		peak := float32(max(raw, peaks[i]))
-		if peak > bin.level {
-			bin.pending = max(bin.pending, peak)
-		}
-		if bin.pending > bin.level {
-			// Retain a rising pulse even if the next measured sweep is lower.
-			bin.level += (bin.pending - bin.level) * rise
-			if bin.pending-bin.level <= .5 {
-				bin.level, bin.pending = bin.pending, 0
-			}
-		} else {
-			bin.level += (float32(raw) - bin.level) * fall
-		}
-		level := e.peakLevels[i]
-		target := max(e.peakTargets[i], peak)
-		if target > level {
-			level += (target - level) * peakRise
-			if target-level <= .5 {
-				level, target = target, 0
-			}
-			e.peakTargets[i] = target
-		} else {
-			level += (peak - level) * peakFall
-			e.peakTargets[i] = 0
-		}
-		e.peakLevels[i] = max(level, bin.level)
+		held := e.peakLevels[i]
+		e.peakLevels[i] = max(peak, held+(peak-held)*peakFall, e.levels[i])
+	}
+	if newSweep {
+		e.transitionAt = now
+		e.transition = max(24*time.Millisecond, min(300*time.Millisecond, e.interval*9/10))
 	}
 	e.at = now
 }

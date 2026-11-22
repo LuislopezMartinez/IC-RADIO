@@ -4,7 +4,7 @@ RX/TX audio console for USB-equipped transceivers, featuring real-time DSP and
 PTT control through RTS or DTR. IC-RADIO lets you use an external USB
 microphone, process your voice, and route it to the radio USB audio input.
 
-![IC-RADIO Operation view showing the IC-7300 RF spectrum and waterfall](assets/screenshots/ic-radio-interface.png)
+![IC-RADIO Operation view showing the receiver controls and RF spectrum panel](assets/screenshots/ic-radio-interface.png)
 
 ![IC-RADIO Audio view showing TX routing, meters, and filters](assets/screenshots/ic-radio-audio.jpg)
 
@@ -88,6 +88,8 @@ Open **CFG** to select the radio's USB COM port and the RTS or DTR line used for
 **Audio** selects the existing TX and RX processing profiles. **CFG** also contains PTT settings and the Sonic Sequencer.
 
 In **Operación**, use **RF POWER** to adjust the radio's output setting over CI-V. **TUNER** toggles the internal tuner and **TUNE** starts a tuning cycle. In **CFG**, **VFO INICIAL** lets you choose A, B, or manual selection when connecting.
+
+Use **RF GAIN**, **AF GAIN**, **SQL**, and **AGC** in Operación to adjust the IC-7300 receiver over CI-V. The **A=B** control asks for confirmation before sending the command to the radio. Band edge indicators mark the selected band on the RF display.
 
 ### SWR measurements
 
