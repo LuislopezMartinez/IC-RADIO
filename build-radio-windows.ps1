@@ -55,6 +55,8 @@ try {
     Write-Host 'Generando ejecutable...'
     & $goPath build -mod=vendor -tags noaudio -trimpath -ldflags '-H=windowsgui' -o $outputPath ./cmd/ic-mic
     if ($LASTEXITCODE -ne 0) { throw "La compilacion fallo con codigo $LASTEXITCODE." }
+    & $goPath build -mod=vendor -trimpath -o (Join-Path $projectRoot 'ic-radio-server.exe') ./cmd/ic-radio-server
+    if ($LASTEXITCODE -ne 0) { throw "La compilacion del servidor fallo con codigo $LASTEXITCODE." }
 }
 finally {
     Pop-Location

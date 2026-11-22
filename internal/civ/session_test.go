@@ -6,6 +6,104 @@ import (
 	"time"
 )
 
+// powerTestPort simulates a radio whose USB serial port stays open in standby.
+type powerTestPort struct {
+	on    bool
+	reply []byte
+	wakes int
+}
+
+func (p *powerTestPort) SetReadTimeout(time.Duration) error { return nil }
+
+func (p *powerTestPort) Read(buf []byte) (int, error) {
+	time.Sleep(5 * time.Millisecond)
+	n := copy(buf, p.reply)
+	p.reply = nil
+	return n, nil
+}
+
+func (p *powerTestPort) Write(frame []byte) (int, error) {
+	start := bytes.IndexByte(frame, 0x94)
+	data := frame[start+2 : len(frame)-1]
+	var reply []byte
+	switch {
+	case p.on && bytes.Equal(data, []byte{0x18, 0}):
+		p.on = false
+		reply = []byte{0xfb}
+	case bytes.Equal(data, []byte{0x18, 1}) && len(frame) == 157:
+		p.wakes++
+		p.on = true
+	case p.on && bytes.Equal(data, []byte{0x03}):
+		reply = []byte{0x03, 0, 0x50, 0x10, 7, 0}
+	case p.on && bytes.Equal(data, []byte{0x1c, 0}):
+		reply = []byte{0x1c, 0, 0}
+	}
+	if reply != nil {
+		p.reply = append(append([]byte{0xfe, 0xfe, 0xe0, 0x94}, reply...), 0xfd)
+	}
+	return len(frame), nil
+}
+
+func TestEnsureRadioOnProbesBeforeWake(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		on    bool
+		wakes int
+	}{
+		{"already on", true, 0},
+		{"standby", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port := &powerTestPort{on: tc.on}
+			s, err := Start(port, 0x94)
+			if err != nil {
+				t.Fatal(err)
+			}
+			accepted := s.EnsureRadioOn()
+			deadline := time.Now().Add(3 * time.Second)
+			for s.Snapshot().PowerPending && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			s.Close()
+			state := s.Snapshot()
+			if !accepted || state.PowerPending || state.Frequency != 7105000 || port.wakes != tc.wakes {
+				t.Fatalf("accepted=%v pending=%v frequency=%d wake commands=%d, want %d",
+					accepted, state.PowerPending, state.Frequency, port.wakes, tc.wakes)
+			}
+		})
+	}
+}
+
+func TestRadioPowerCycle(t *testing.T) {
+	s, err := Start(&powerTestPort{on: true}, 0x94)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	waitFor := func(label string, ready func(State) bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if ready(s.Snapshot()) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s: %+v", label, s.Snapshot())
+	}
+	waitFor("receive mode", func(state State) bool { return state.TXKnown })
+	if !s.SetRadioPower(false) || s.SetRadioPower(false) {
+		t.Fatal("expected exactly one queued shutdown")
+	}
+	waitFor("standby", func(state State) bool { return state.PoweredOff && !state.PowerPending })
+	if !s.SetRadioPower(true) {
+		t.Fatal("wake command rejected in standby")
+	}
+	waitFor("frequency after wake", func(state State) bool {
+		return !state.PowerPending && !state.PoweredOff && state.Frequency == 7105000
+	})
+}
+
 func TestDecoderAndRadioState(t *testing.T) {
 	s := &Session{address: 0x94}
 	var d decoder
@@ -163,7 +261,7 @@ func TestConfirmedVFOFeedback(t *testing.T) {
 	s.confirmVFOCommand(command, now)
 	s.confirmVFOCommand([]byte{0x07, 0xa0}, now)
 	got := s.Snapshot()
-	if !got.VFOKnown || got.VFO != 1 || got.VFOEqualizedAt != now {
+	if !got.VFOKnown || got.VFO != 1 || got.VFOAt != now || got.VFOEqualizedAt != now {
 		t.Fatalf("unexpected VFO feedback: known=%v VFO=%d equalized=%v", got.VFOKnown, got.VFO, got.VFOEqualizedAt)
 	}
 }

@@ -98,6 +98,19 @@ Completed sweeps are saved per band. Use **SWR** to overlay the saved sweep on t
 ![IC-RADIO SWR graph with simulated data](assets/screenshots/ic-radio-swr.png)
 
 
+### TX telemetry
+
+During transmission, Operación displays output power, SWR, ALC, supply voltage and current, and compressor level when reported by the radio.
+
+![IC-RADIO transmit telemetry with simulated readings](assets/screenshots/ic-radio-tx.png)
+
+## Local server mode
+
+The Windows ZIP includes `ic-radio-server.exe`. Run it on the Windows PC connected to the IC-7300, select the USB COM port and CI-V address, and set an access password. The default PTT line is RTS. If the radio uses DTR, start the server with `-ptt-line DTR`. Run `ic-radio-server.exe -h` for the available options.
+
+On that same PC, open `ic-radio.exe`, select **MODO REMOTO** in **CFG**, and enter the server address `127.0.0.1`, its port (default `7300`), and the same password. The server handles CI-V and, when the radio's USB audio devices are available, RX audio, microphone TX and PTT, and SWR sweeps. Close other applications using the radio's COM port before starting the server. This version listens only on the same PC.
+
+
 ## PTT safety
 
 IC-RADIO clears RTS and DTR when opening and closing the serial port. Escape

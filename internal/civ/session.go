@@ -25,6 +25,10 @@ type Sweep struct {
 }
 
 type State struct {
+	PowerPending           bool
+	PoweredOff             bool
+	PowerError             string
+	TXSince                time.Time
 	Tuner                  byte
 	TunerAt                time.Time
 	PowerSetting           int
@@ -32,6 +36,7 @@ type State struct {
 	Split                  bool
 	VFO                    byte
 	VFOKnown               bool
+	VFOAt                  time.Time
 	VFOEqualizedAt         time.Time
 	Band                   BandMemory
 	RX                     [5]RXValue
@@ -77,10 +82,19 @@ type RXValue struct {
 
 var rxCommands = [...][]byte{{0x16, 2}, {0x11}, {0x16, 0x41}, {0x16, 0x22}, {0x16, 0x40}}
 
+type powerRequest byte
+
+const (
+	powerOff powerRequest = iota
+	powerOn
+	powerProbe
+)
+
 type Session struct {
 	address    byte
 	stop, done chan struct{}
 	requests   chan []byte
+	power      chan powerRequest
 	meter      atomic.Uint32
 	swrMeter   atomic.Bool
 	mu         sync.RWMutex
@@ -92,7 +106,7 @@ func Start(port Port, address byte) (*Session, error) {
 	if err := port.SetReadTimeout(10 * time.Millisecond); err != nil {
 		return nil, err
 	}
-	s := &Session{address: address, stop: make(chan struct{}), done: make(chan struct{}), requests: make(chan []byte, 8)}
+	s := &Session{address: address, stop: make(chan struct{}), done: make(chan struct{}), requests: make(chan []byte, 8), power: make(chan powerRequest, 1)}
 	go s.run(port)
 	return s, nil
 }
@@ -120,6 +134,38 @@ func (s *Session) TakeDisplaySnapshot() (State, [Samples]byte) {
 
 func (s *Session) SelectMeter(code byte) { s.meter.Store(uint32(code)) }
 
+func (s *Session) SetRadioPower(on bool) bool {
+	if on {
+		return s.requestPower(powerOn)
+	}
+	return s.requestPower(powerOff)
+}
+
+// EnsureRadioOn probes the radio before attempting to wake it.
+func (s *Session) EnsureRadioOn() bool {
+	return s.requestPower(powerProbe)
+}
+
+func (s *Session) requestPower(request powerRequest) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := &s.state
+	if state.PowerPending || state.Error != "" || s.swrMeter.Load() {
+		return false
+	}
+	live := time.Since(state.LastReply) < 2*time.Second
+	if request == powerOn && live || request == powerOff && (!live || !state.TXKnown || state.TX) {
+		return false
+	}
+	select {
+	case <-s.done:
+		return false
+	case s.power <- request:
+		state.PowerPending, state.PowerError = true, ""
+		return true
+	}
+}
+
 func (s *Session) command(data ...byte) bool {
 	select {
 	case <-s.done:
@@ -134,8 +180,12 @@ func (s *Session) command(data ...byte) bool {
 	}
 }
 
+func CanTune(hz int64) bool {
+	return hz >= 30000 && hz <= 74800000
+}
+
 func (s *Session) Tune(hz int64) bool {
-	if hz < 30000 || hz > 74800000 {
+	if !CanTune(hz) {
 		return false
 	}
 	return s.command(append([]byte{0x05}, encodeFrequency(hz)...)...)
@@ -189,6 +239,10 @@ func (s *Session) SetMode(mode byte) bool { return s.command(0x06, mode) }
 func (s *Session) write(port Port, data ...byte) bool {
 	frame := append([]byte{0xfe, 0xfe, s.address, 0xe0}, data...)
 	frame = append(frame, 0xfd)
+	if bytes.Equal(data, []byte{0x18, 1}) {
+		// The USB serial port runs at 115200 baud.
+		frame = append(bytes.Repeat([]byte{0xfe}, 150), frame...)
+	}
 	n, err := port.Write(frame)
 	if err == nil && n == len(frame) {
 		return true
@@ -200,7 +254,19 @@ func (s *Session) write(port Port, data ...byte) bool {
 func (s *Session) fail(message string) {
 	s.mu.Lock()
 	s.state.Error = message
+	s.state.PowerPending, s.state.PoweredOff = false, false
 	s.mu.Unlock()
+}
+
+func (s *Session) finishPower(off bool, message string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if off {
+		s.state = State{PoweredOff: true}
+		s.peaks = [Samples]byte{}
+		return
+	}
+	s.state.PowerPending, s.state.PowerError = false, message
 }
 
 func (s *Session) run(port Port) {
@@ -211,7 +277,9 @@ func (s *Session) run(port Port) {
 	var outstanding, readback []byte
 	var answered bool
 	var enableOutput bool
-	var poll, rxPoll, swrPoll int
+	var poll, rxPoll, swrPoll, txPoll int
+	var powerSent, offAck, probeUntil time.Time
+	var poweringOn bool
 	var buf [1024]byte
 	for {
 		select {
@@ -223,25 +291,76 @@ func (s *Session) run(port Port) {
 		default:
 		}
 		now := time.Now()
-		if readyForCommand(now.Sub(sentAt), answered) {
+		if !powerSent.IsZero() {
+			state := s.Snapshot()
+			switch {
+			case poweringOn && state.FrequencyAt.After(powerSent):
+				s.finishPower(false, "")
+				powerSent = time.Time{}
+			case !offAck.IsZero() && now.Sub(offAck) >= time.Second && now.Sub(state.LastReply) >= time.Second:
+				s.finishPower(true, "")
+				scope = assembler{}
+				enableAt, enableOutput, readback = time.Time{}, false, nil
+				powerSent, offAck = time.Time{}, time.Time{}
+			case now.Sub(powerSent) >= 5*time.Second:
+				s.finishPower(false, "La emisora no confirmó la orden")
+				powerSent, offAck = time.Time{}, time.Time{}
+			}
+		}
+		waitingForPowerOff := !powerSent.IsZero() && !poweringOn
+		if !waitingForPowerOff && readyForCommand(now.Sub(sentAt), answered) {
 			state := s.Snapshot()
 			live := now.Sub(state.LastReply) < 2*time.Second
 			var cmd []byte
 			select {
+			case request := <-s.power:
+				if request == powerProbe {
+					probeUntil = now.Add(time.Second)
+					break
+				}
+				on := request == powerOn
+				if on && live || !on && (!live || state.TX || !state.TXKnown) || s.swrMeter.Load() {
+					s.finishPower(false, "La orden ya no se puede ejecutar")
+					break
+				}
+				cmd = []byte{0x18, 0}
+				if on {
+					cmd[1] = 1
+				}
+				poweringOn, powerSent = on, now
+				readback = nil
 			case request := <-s.requests:
-				if live && !state.TX && (state.TXKnown || request[0] == 0x27) {
+				if live && !state.PowerPending && !state.TX && (state.TXKnown || request[0] == 0x27) {
 					cmd = request
 					readback = commandReadback(request)
 				}
 			default:
 			}
+			if !probeUntil.IsZero() {
+				switch {
+				case live:
+					s.finishPower(false, "")
+					probeUntil = time.Time{}
+				case now.Before(probeUntil):
+					cmd = []byte{0x03}
+				default:
+					cmd = []byte{0x18, 1}
+					poweringOn, powerSent = true, now
+					probeUntil, readback = time.Time{}, nil
+				}
+			}
 			if cmd == nil {
 				switch {
+				case !powerSent.IsZero() || state.PoweredOff:
+					cmd = []byte{0x03}
 				case readback != nil:
 					cmd, readback = readback, nil
 				case s.swrMeter.Load():
 					cmd = swrMeasurementPoll[swrPoll]
 					swrPoll = (swrPoll + 1) % len(swrMeasurementPoll)
+				case state.TXKnown && state.TX:
+					cmd = txTelemetryPoll[txPoll]
+					txPoll = (txPoll + 1) % len(txTelemetryPoll)
 				case enableOutput:
 					cmd = []byte{0x27, 0x11, 1}
 					enableOutput = false
@@ -272,6 +391,16 @@ func (s *Session) run(port Port) {
 			now := time.Now()
 			if !answered && s.isReply(frame, outstanding) {
 				answered = true
+				if len(frame) == 3 && len(outstanding) == 2 && outstanding[0] == 0x18 {
+					switch {
+					case frame[2] == 0xfa:
+						s.finishPower(false, "La emisora rechazó la orden")
+						powerSent = time.Time{}
+					case !poweringOn:
+						offAck = now
+					}
+					return
+				}
 				if len(frame) == 3 && frame[2] == 0xfb {
 					s.confirmVFOCommand(outstanding, now)
 				}
@@ -279,6 +408,12 @@ func (s *Session) run(port Port) {
 			s.receive(frame, &scope, now)
 		})
 	}
+}
+
+var txTelemetryPoll = [...][]byte{
+	{0x15, 0x11}, {0x15, 0x12}, {0x15, 0x13}, {0x1c, 0},
+	{0x15, 0x15}, {0x15, 0x16}, {0x15, 0x14}, {0x1c, 0},
+	{0x15, 0x11}, {0x1c, 1},
 }
 
 var swrMeasurementPoll = [...][]byte{{0x15, 0x11}, {0x15, 0x12}, {0x1c, 0}, {0x15, 0x11}, {0x15, 0x12}, {0x03}, {0x0f}, {0x04}}
@@ -338,7 +473,7 @@ func (s *Session) confirmVFOCommand(command []byte, now time.Time) {
 	defer s.mu.Unlock()
 	switch command[1] {
 	case 0, 1:
-		s.state.VFO, s.state.VFOKnown = command[1], true
+		s.state.VFO, s.state.VFOKnown, s.state.VFOAt = command[1], true, now
 	case 0xa0:
 		s.state.VFOEqualizedAt = now
 	}
@@ -351,7 +486,7 @@ func (s *Session) isReply(frame, command []byte) bool {
 	data := frame[2:]
 	if len(data) == 1 && (data[0] == 0xfb || data[0] == 0xfa) {
 		switch command[0] {
-		case 5, 6, 7, 0x26:
+		case 5, 6, 7, 0x18, 0x26:
 			return true
 		case 0x11:
 			return len(command) == 2
@@ -405,6 +540,7 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 			return
 		}
 		state.Frequency, state.FrequencyAt = hz, now
+		state.PoweredOff = false
 	case 1, 4, 6:
 		if len(data) < 2 {
 			return
@@ -431,7 +567,11 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 		}
 		switch {
 		case data[1] == 0 && data[2] <= 1:
-			state.TX, state.TXKnown, state.TXAt = data[2] == 1, true, now
+			transmitting := data[2] == 1
+			if transmitting && !state.TX {
+				state.TXSince = now
+			}
+			state.TX, state.TXKnown, state.TXAt = transmitting, true, now
 		case data[1] == 1 && data[2] <= 2:
 			state.Tuner, state.TunerAt = data[2], now
 		default:

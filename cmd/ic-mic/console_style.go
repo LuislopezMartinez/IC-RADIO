@@ -102,6 +102,10 @@ func drawRXButtons(state civ.State, online bool) {
 func (a *app) updateRadioButtons(mouse rl.Vector2, state civ.State) bool {
 	for i, rect := range vfoControls {
 		if clicked(mouse, rect) {
+			if a.radio.initialVFOPending {
+				a.message = "Esperando confirmación de VFO A"
+				return true
+			}
 			if i == 2 {
 				a.radio.session.EqualizeVFO()
 			} else {
@@ -144,7 +148,7 @@ func (a *app) updateRadioButtons(mouse rl.Vector2, state civ.State) bool {
 	return false
 }
 
-func (a *app) drawConsolePTT(mouse rl.Vector2) {
+func (a *app) drawConsolePTT(mouse rl.Vector2, transmitting bool, startedAt time.Time) {
 	r := operationPTT()
 	accent := color.cyan
 	fill := rl.NewColor(13, 40, 53, 255)
@@ -158,12 +162,17 @@ func (a *app) drawConsolePTT(mouse rl.Vector2) {
 		shortcut = "ESPACIO"
 	}
 	hint += " · " + shortcut
-	if !a.ptt.Connected() {
+	if a.settings.RemoteMode && a.radio.remote == nil {
+		hint = "CONECTA AL SERVIDOR EN CFG"
+	} else if !a.settings.RemoteMode && !a.ptt.Connected() {
 		hint = "CONECTA EL PTT EN CFG"
 	}
-	if a.ptt.TX() {
+	if transmitting {
 		accent, fill = color.red, rl.NewColor(75, 20, 27, 255)
-		label, hint = "TX", time.Since(a.txSince).Truncate(time.Second).String()
+		label, hint = "TX", ""
+		if !startedAt.IsZero() {
+			hint = time.Since(startedAt).Truncate(time.Second).String()
+		}
 	}
 	if rl.CheckCollisionPointRec(mouse, r) {
 		fill = mix(fill, rl.White, .08)

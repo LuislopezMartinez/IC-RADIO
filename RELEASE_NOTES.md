@@ -1,14 +1,12 @@
-# IC-RADIO v0.9.0
+# IC-RADIO v0.10.0
 
 ## Highlights
 
-- Measure SWR across a configurable frequency range on the IC-7300. Save completed sweeps by band and display them over the RF spectrum.
-- Adjust RF output power, switch the internal tuner on or off, and start a TUNE cycle from Operación.
-- Choose VFO A, VFO B, or manual selection when connecting.
-- Refine RF spectrum and waterfall rendering and expand CI-V reporting for power, split, and tuner state.
+- Added a password-protected local IC-7300 server for CI-V, RX audio, microphone TX and PTT, and SWR sweeps. The client and server run on the same Windows PC.
+- Added a dedicated transmission panel for output power, SWR, ALC, supply voltage and current, and compression.
+- Added RF band coverage indicators and refined frequency entry and the initial VFO behavior.
+- Updated the SWR panel and shared the sweep logic between the local console and server modes.
 
 ## Download
 
-Download `IC-RADIO-Windows-x64-v0.9.0.zip`, extract the complete archive, and run `ic-radio.exe`. Keep `runtime` alongside the executable.
-
-The SWR test transmits a tone. See the IC-7300 operation section of the README for setup and measurement instructions.
+Extract `IC-RADIO-Windows-x64-v0.10.0.zip` and run `ic-radio.exe`. Keep the `runtime` folder alongside the executables. For local server mode, follow the README instructions for `ic-radio-server.exe`.

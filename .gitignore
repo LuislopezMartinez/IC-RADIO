@@ -1,5 +1,6 @@
 ic-mic.exe
 ic-radio.exe
+ic-radio-server.exe
 *.exe~
 settings.json
 *.log

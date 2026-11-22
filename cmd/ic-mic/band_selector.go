@@ -72,6 +72,7 @@ func (a *app) updateBandSelector(mouse rl.Vector2, state civ.State, online bool)
 				s.tuneAt = now
 			} else if !s.tuneAt.IsZero() && state.FrequencyAt.After(s.tuneAt) && state.Frequency == memory.Frequency &&
 				r.session.RestoreBandMode(memory) {
+				r.selectedBand = s.band
 				a.message = fmt.Sprintf("BAND %s - Registro %d", radioBands[bandAtFrequency(memory.Frequency)].name, s.register)
 				*s = bandSelector{}
 			}
@@ -151,7 +152,7 @@ func (a *app) requestBandMemory(band, register byte, now time.Time) {
 
 func (a *app) drawBandButton(state civ.State, online bool) {
 	label := "BAND"
-	if i := bandAtFrequency(state.Frequency); online && i >= 0 && time.Since(state.FrequencyAt) < 2*time.Second {
+	if i := a.radio.coverageBand(state.Frequency); online && i >= 0 && time.Since(state.FrequencyAt) < 2*time.Second {
 		label += " " + radioBands[i].name
 	}
 	drawConsoleButton(bandControl(), label, a.radio.bands.open, false)
@@ -173,7 +174,7 @@ func (a *app) drawBandPanel(state civ.State) {
 	}
 	drawText("BAND", 247, 306, 23, color.text)
 	drawText("Mantener para elegir registro", 450, 310, 15, color.muted)
-	current := bandAtFrequency(state.Frequency)
+	current := a.radio.coverageBand(state.Frequency)
 	for i, band := range radioBands {
 		drawConsoleButton(bandKey(i), band.name, i == current || s.pressed == band.code, false)
 	}

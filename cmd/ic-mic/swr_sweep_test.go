@@ -1,17 +1,24 @@
 package main
 
-import "testing"
+import (
+	"github.com/LuislopezMartinez/IC-RADIO/internal/swr"
+	"testing"
+)
 
 func TestSWRFrequenciesAndCalibration(t *testing.T) {
-	points := swrFrequencies(14100000, 10000, 13)
+	points := swr.Frequencies(14100000, 10000, 13)
 	if len(points) != 13 || points[0].Hz != 14040000 || points[6].Hz != 14100000 || points[12].Hz != 14160000 {
 		t.Fatal("incorrect symmetric sweep")
 	}
-	if !validSWRRange(points[0].Hz, points[12].Hz) || validSWRRange(13990000, 14160000) {
-		t.Fatal("incorrect range guard")
+	wide := (swr.Request{Center: 18145000, Step: 10000, Count: 13}).ValidatedPoints()
+	if len(wide) != 13 || wide[0].Hz != 18085000 || wide[12].Hz != 18205000 {
+		t.Fatal("sweep crossing the previous band limit was not accepted")
+	}
+	if (swr.Request{Center: 74800000, Step: 10000, Count: 3}).ValidatedPoints() != nil {
+		t.Fatal("sweep exceeded the tuning limits")
 	}
 	for raw, want := range map[int]float64{0: 1, 48: 1.5, 80: 2, 120: 3} {
-		if got := swrRatio(raw); got != want {
+		if got := swr.Ratio(raw); got != want {
 			t.Fatalf("raw %d: got %g, want %g", raw, got, want)
 		}
 	}

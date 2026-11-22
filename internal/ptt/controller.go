@@ -19,6 +19,7 @@ const (
 
 type Port struct {
 	Name, Description string
+	IsUSB             bool
 }
 
 func Ports() []Port {
@@ -32,7 +33,7 @@ func Ports() []Port {
 		if description == "" {
 			description = item.Name
 		}
-		result = append(result, Port{Name: item.Name, Description: description})
+		result = append(result, Port{Name: item.Name, Description: description, IsUSB: item.IsUSB})
 	}
 	return result
 }

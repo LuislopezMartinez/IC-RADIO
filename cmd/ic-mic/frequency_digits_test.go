@@ -20,12 +20,25 @@ func TestFrequencyClickSelectsEveryDigit(t *testing.T) {
 			if step != tc.steps[i] {
 				t.Fatalf("frequency %d, character %d: got step %d, want %d", tc.hz, i, step, tc.steps[i])
 			}
-			if step > 0 && operationWheelStep(step, 100, false) != step {
+			if step > 0 && operationTuningStep(step, 100, false) != step {
 				t.Fatalf("the wheel lost step %d after the pointer moved", step)
 			}
 		}
 	}
-	if operationWheelStep(0, 100, false) != 0 || operationWheelStep(0, 100, true) != 100 {
+	if operationTuningStep(0, 100, false) != 0 || operationTuningStep(0, 100, true) != 100 {
 		t.Fatal("unexpected fallback wheel behavior")
+	}
+}
+
+func TestSpectrumClickRoundsToSelectedDigit(t *testing.T) {
+	for _, tc := range []struct{ hz, digit, want int64 }{
+		{14204630, 1000, 14205000},
+		{14204400, 1000, 14204000},
+		{14204630, 100, 14204600},
+		{14204630, 0, 14204600},
+	} {
+		if got := quantizeFrequency(tc.hz, operationTuningStep(tc.digit, 100, true)); got != tc.want {
+			t.Errorf("click at %d with digit step %d: got %d, want %d", tc.hz, tc.digit, got, tc.want)
+		}
 	}
 }

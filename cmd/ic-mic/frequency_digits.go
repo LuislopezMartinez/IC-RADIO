@@ -65,7 +65,7 @@ func tuneDigit(hz, step, delta int64) int64 {
 	return (base + delta) * step
 }
 
-func operationWheelStep(selected, fallback int64, overTuningArea bool) int64 {
+func operationTuningStep(selected, fallback int64, overTuningArea bool) int64 {
 	if selected > 0 {
 		return selected
 	}

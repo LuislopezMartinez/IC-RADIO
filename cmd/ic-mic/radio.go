@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
 	"github.com/LuislopezMartinez/IC-RADIO/internal/ptt"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/remote"
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"math"
 	"strconv"
@@ -29,27 +30,35 @@ var radioMeters = [...]struct {
 }{{"S / Po", 0}, {"S", 2}, {"Po", 0x11}, {"SWR", 0x12}, {"ALC", 0x13}, {"COMP", 0x14}, {"Vd", 0x15}, {"Id", 0x16}}
 
 type radioPanel struct {
-	initialVFOPending                 bool
-	output                            outputControls
-	swr                               swrPanel
-	bands                             bandSelector
-	page                              radioPage
-	session                           *civ.Session
-	step, meter                       int
-	digitStep, wheelTarget, wheelBase int64
-	wheelUntil                        time.Time
-	showPeak                          bool
-	zoom                              rfVerticalZoom
-	input                             string
-	editing, modeMenu, cancelled      bool
-	texture                           rl.Texture2D
-	pixels                            []rl.Color
-	lastSweep                         civ.Sweep
-	trace                             [civ.Samples]rl.Vector2
-	fill                              [2 * civ.Samples]rl.Vector2
-	fillGradient                      rfFillGradient
-	peakTrace                         [civ.Samples]rl.Vector2
-	envelope                          rfEnvelope
+	txNeedles                             txNeedles
+	initialVFOPending                     bool
+	initialVFOAttempt, initialVFOBaseline time.Time
+	output                                outputControls
+	swr                                   swrPanel
+	bands                                 bandSelector
+	selectedBand                          byte
+	page                                  radioPage
+	session                               remote.Radio
+	remote                                *remote.Client
+	remoteEdit                            int
+	remotePassword                        string
+	rxAudio                               remoteRXPlayback
+	txAudio                               remoteTX
+	step, meter                           int
+	digitStep, wheelTarget, wheelBase     int64
+	wheelUntil                            time.Time
+	showPeak                              bool
+	zoom                                  rfVerticalZoom
+	input                                 string
+	editing, modeMenu, cancelled          bool
+	texture                               rl.Texture2D
+	pixels                                []rl.Color
+	lastSweep                             civ.Sweep
+	trace                                 [civ.Samples]rl.Vector2
+	fill                                  [2 * civ.Samples]rl.Vector2
+	fillGradient                          rfFillGradient
+	peakTrace                             [civ.Samples]rl.Vector2
+	envelope                              rfEnvelope
 }
 
 func (r *radioPanel) unload() {
@@ -60,6 +69,11 @@ func (r *radioPanel) unload() {
 }
 
 func (r *radioPanel) cancelInput() {
+	r.rxAudio.menu = 0
+	if r.remoteEdit == editRemotePassword {
+		r.input = ""
+	}
+	r.remoteEdit = 0
 	r.cancelled = r.editing
 	r.editing, r.modeMenu = false, false
 	r.bands = bandSelector{}
@@ -105,11 +119,18 @@ func operationReset() rl.Rectangle   { return rl.NewRectangle(1395, 807, 175, 48
 func meterRect() rl.Rectangle        { return rl.NewRectangle(1033, 98, 536, 102) }
 
 func connectionRect() rl.Rectangle { return rl.NewRectangle(1385, 13, 194, 42) }
+func radioPowerRect() rl.Rectangle { return rl.NewRectangle(26, 11, 43, 43) }
 
 func (a *app) updateNavigation(mouse rl.Vector2) bool {
+	if clicked(mouse, radioPowerRect()) {
+		a.toggleRadioPower()
+		return true
+	}
 	if clicked(mouse, connectionRect()) {
-		if a.ptt.Connected() {
+		if a.radio.remote != nil || a.ptt.Connected() {
 			a.disconnectRadio()
+		} else if a.settings.RemoteMode {
+			a.connectRemote()
 		} else {
 			a.connectFromHeader()
 		}
@@ -122,8 +143,12 @@ func (a *app) updateNavigation(mouse rl.Vector2) bool {
 		if radioPage(i) == a.radio.page {
 			return true
 		}
-		if a.mousePTTActive || a.keyPTTActive {
-			a.setTX(false)
+		if a.mousePTTActive || a.keyPTTActive || a.radio.txAudio.active.Load() {
+			if a.settings.RemoteMode {
+				a.stopRemoteTX()
+			} else {
+				a.setTX(false)
+			}
 			a.mousePTTActive, a.keyPTTActive = false, false
 		}
 		a.txGainDrag = false
@@ -135,26 +160,117 @@ func (a *app) updateNavigation(mouse rl.Vector2) bool {
 	return false
 }
 
+func (a *app) toggleRadioPower() {
+	if a.transmitting() || a.radio.swr.cancel != nil {
+		a.message = "Espera a que la emisora vuelva a recepción"
+		return
+	}
+	if a.settings.RemoteMode && a.radio.remote == nil {
+		if a.connectRemote() {
+			a.radio.remote.EnsureRadioOn()
+		}
+		return
+	}
+	state, online := a.radio.snapshot()
+	if state.PowerPending {
+		return
+	}
+	if !a.settings.RemoteMode && (a.radio.session == nil || state.Error != "") {
+		if a.settings.COM == "" {
+			a.message = "Selecciona el puerto del Icom en CFG"
+			a.radio.page = pageConfig
+			a.radio.cancelInput()
+			return
+		}
+		var connected bool
+		if a.ptt.Connected() && state.Error == "" {
+			connected = a.startRadioCIV()
+		} else {
+			connected = a.openRadioPort(a.settings.COM, true)
+		}
+		if !connected {
+			a.message += ". Revisa el puerto USB en CFG"
+			a.radio.page = pageConfig
+			a.radio.cancelInput()
+			return
+		}
+		state, online = civ.State{}, false
+	}
+	var accepted bool
+	switch {
+	case online:
+		accepted = a.radio.session.SetRadioPower(false)
+	case state.PoweredOff:
+		accepted = a.radio.session.SetRadioPower(true)
+	default:
+		accepted = a.radio.session.EnsureRadioOn()
+	}
+	if !accepted {
+		a.message = "El control de encendido no está disponible"
+	} else if !online {
+		a.radio.requestInitialVFO()
+	}
+}
+
+func drawRadioPower(state civ.State, online bool) {
+	shade := rl.NewColor(157, 165, 170, 255)
+	switch {
+	case state.PowerPending:
+		shade = rl.NewColor(255, 198, 75, 255)
+	case online:
+		shade = color.green
+	case state.PoweredOff:
+		shade = color.red
+	}
+	rect := radioPowerRect()
+	rl.DrawRectangleRounded(rect, .24, 8, rl.NewColor(19, 25, 29, 255))
+	rl.DrawRectangleRoundedLinesEx(rect, .24, 8, 2, shade)
+	center := rl.NewVector2(rect.X+rect.Width/2, rect.Y+rect.Height/2)
+	rl.DrawRing(center, 8, 11, -54, 234, 32, shade)
+	rl.DrawLineEx(rl.NewVector2(center.X, center.Y-13), rl.NewVector2(center.X, center.Y-2), 3, shade)
+}
+
 func (a *app) drawNavigation() {
-	drawMilitaryText("IC-RADIO", 32, 7, 50, rl.NewColor(18, 23, 25, 255))
-	drawText("by EA3IWW", 285, 24, 21, rl.NewColor(32, 38, 42, 255))
+	radioState, online := a.radio.snapshot()
+	drawRadioPower(radioState, online)
+	drawMilitaryText("IC-RADIO", 83, 7, 50, rl.NewColor(18, 23, 25, 255))
+	drawText("by EA3IWW", 336, 24, 21, rl.NewColor(32, 38, 42, 255))
 	for i, name := range []string{"OPERACIÓN", "AUDIO", "CFG"} {
 		drawConsoleButton(navRect(i), name, radioPage(i) == a.radio.page, false)
 	}
-	_, online := a.radio.snapshot()
 	port := a.settings.COM
 	if port == "" {
 		port = "USB"
 	}
-	drawConsoleText(semiboldFont, "IC-7300  ·  "+port, rl.NewRectangle(1110, 12, 227, 44), 23, rl.NewColor(14, 20, 23, 255))
+	route := "IC-7300  ·  " + port
+	if a.settings.RemoteMode {
+		route = "REMOTO"
+	}
+	drawConsoleText(semiboldFont, route, rl.NewRectangle(1110, 12, 227, 44), 23, rl.NewColor(14, 20, 23, 255))
 	for _, x := range []int32{507, 1094} {
 		rl.DrawLine(x, 13, x, 55, rl.NewColor(28, 35, 39, 255))
 	}
 	state, shade, fill := "DESCONECTADO", color.red, rl.NewColor(52, 13, 19, 255)
-	if online || a.ptt.Connected() && a.settings.DisableCIV {
+	if online || a.ptt.Connected() && a.radio.session == nil && a.settings.DisableCIV {
 		state, shade, fill = "CONECTADO", color.green, rl.NewColor(6, 37, 16, 255)
 	} else if a.ptt.Connected() {
 		state = "COM SIN CI-V"
+	}
+	if a.radio.remote != nil && !online {
+		state = "REMOTO · SIN CI-V"
+		if radioState.Error == remote.PasswordError {
+			state = "CLAVE INCORRECTA"
+		} else if radioState.Error != "" {
+			state = "SIN RESPUESTA"
+		}
+	}
+	switch {
+	case radioState.PowerPending:
+		state, shade, fill = "ESPERANDO RADIO", rl.NewColor(255, 198, 75, 255), rl.NewColor(48, 34, 12, 255)
+	case radioState.PowerError != "":
+		state, shade, fill = "ORDEN FALLIDA", color.red, rl.NewColor(52, 13, 19, 255)
+	case radioState.PoweredOff:
+		state = "RADIO APAGADA"
 	}
 	rect := connectionRect()
 	rl.DrawRectangleRounded(rect, .22, 8, fill)
@@ -183,6 +299,12 @@ func (a *app) connectFromHeader() {
 }
 
 func (a *app) disconnectRadio() {
+	if a.radio.remote != nil {
+		a.stopRemoteTX()
+		a.stopRemoteAudio()
+		a.radio.remote.Close()
+		a.radio.remote = nil
+	}
 	if a.ptt.TX() {
 		a.signalEnding = true
 		a.setTX(false)
@@ -191,25 +313,37 @@ func (a *app) disconnectRadio() {
 	a.signalEnding = false
 	a.keyPTTActive, a.mousePTTActive = false, false
 	a.radio.session = nil
+	a.radio.selectedBand = 0
 	a.radio.initialVFOPending = false
 	a.radio.cancelInput()
 	a.message = "Puerto desconectado"
 }
 
+func (r *radioPanel) requestInitialVFO() {
+	r.initialVFOPending = true
+	r.initialVFOAttempt, r.initialVFOBaseline = time.Time{}, time.Time{}
+}
+
 func (a *app) applyInitialVFO() {
-	if !a.radio.initialVFOPending || a.ptt.TX() {
+	r := &a.radio
+	if r.session == nil {
 		return
 	}
-	state, online := a.radio.snapshot()
-	if !online || !state.TXKnown || state.TX || state.Tuner == 2 {
+	state, online := r.snapshot()
+	if state.PoweredOff && !r.initialVFOPending {
+		r.requestInitialVFO()
+	}
+	if !r.initialVFOPending || !online || state.PowerPending || !state.TXKnown || state.TX || a.transmitting() || state.Tuner == 2 {
 		return
 	}
-	vfo := byte(0)
-	if a.settings.InitialVFO == "B" {
-		vfo = 1
+	if !r.initialVFOAttempt.IsZero() && state.VFOKnown && state.VFO == 0 && state.VFOAt.After(r.initialVFOBaseline) {
+		if !state.FrequencyAt.Before(state.VFOAt) {
+			r.initialVFOPending = false
+		}
+		return
 	}
-	if a.radio.session.SelectVFO(vfo) {
-		a.radio.initialVFOPending = false
+	if time.Since(r.initialVFOAttempt) >= time.Second && r.session.SelectVFO(0) {
+		r.initialVFOAttempt, r.initialVFOBaseline = time.Now(), state.VFOAt
 	}
 }
 
@@ -223,6 +357,9 @@ func (a *app) civAddress() byte {
 
 func (a *app) updateRadioConfig(mouse rl.Vector2) {
 	r := &a.radio
+	if a.updateConnectionMode(mouse) {
+		return
+	}
 	if r.cancelled {
 		r.cancelled = false
 		return
@@ -271,17 +408,6 @@ func (a *app) updateRadioConfig(mouse rl.Vector2) {
 		if clicked(mouse, configControl(50, 183)) {
 			r.editing, r.input = true, fmt.Sprintf("%02X", a.civAddress())
 		}
-		if clicked(mouse, configControl(490, 183)) {
-			switch a.settings.InitialVFO {
-			case "A":
-				a.settings.InitialVFO = "B"
-			case "B":
-				a.settings.InitialVFO = ""
-			default:
-				a.settings.InitialVFO = "A"
-			}
-			a.save()
-		}
 		if clicked(mouse, configControl(270, 183)) {
 			a.settings.DisableCIV = !a.settings.DisableCIV
 			a.save()
@@ -313,7 +439,12 @@ func (a *app) updateRadioConfig(mouse rl.Vector2) {
 func configControl(x, y float32) rl.Rectangle { return rl.NewRectangle(x, y, 205, 44) }
 
 func (a *app) drawRadioConfig(mouse rl.Vector2) {
+	if a.settings.RemoteMode {
+		a.drawRemoteConfig()
+		return
+	}
 	drawDarkDisplay(rl.NewRectangle(30, 96, 1540, 282))
+	a.drawConnectionMode()
 	drawText("CONEXIÓN IC-7300", 50, 114, 28, color.text)
 	drawText("CI-V USB 115200 · Unlink from [REMOTE]", 50, 152, 19, color.muted)
 	address := fmt.Sprintf("%02X", a.civAddress())
@@ -322,11 +453,7 @@ func (a *app) drawRadioConfig(mouse rl.Vector2) {
 	}
 	drawButton(configControl(50, 183), "CI-V  "+address+"h", a.radio.editing)
 	drawButton(configControl(270, 183), "CI-V USB", !a.settings.DisableCIV)
-	initialVFO := a.settings.InitialVFO
-	if initialVFO != "A" && initialVFO != "B" {
-		initialVFO = "MANUAL"
-	}
-	drawButton(configControl(490, 183), "VFO INICIAL  "+initialVFO, initialVFO != "MANUAL")
+	drawText("VFO INICIAL  A", 500, 193, 21, color.text)
 	port := "SIN PUERTOS"
 	if len(a.ports) > 0 {
 		port = a.ports[a.comIndex].Name
@@ -401,7 +528,7 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 		return
 	}
 	if a.settings.PTTMode == "hold" {
-		if clicked(mouse, operationPTT()) && !a.ptt.TX() {
+		if clicked(mouse, operationPTT()) && !a.transmitting() {
 			a.mousePTTActive = a.setTX(true)
 		}
 		if a.mousePTTActive && (!rl.IsMouseButtonDown(rl.MouseLeftButton) || !rl.IsWindowFocused()) {
@@ -418,6 +545,9 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 	if clicked(mouse, operationReset()) {
 		a.txSignal.resetSafety()
 		a.message = "Protección TX restablecida"
+	}
+	if a.transmitting() || online && state.TX {
+		return
 	}
 	if clicked(mouse, meterRect()) {
 		r.meter = (r.meter + 1) % len(radioMeters)
@@ -480,9 +610,10 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 		if rl.CheckCollisionPointRec(mouse, waterfall) {
 			tuneArea = waterfall
 		}
-		r.session.Tune(quantizeFrequency(rfFrequency(tuneArea, mouse.X, sweep), step))
+		clickStep := operationTuningStep(r.digitStep, step, true)
+		r.session.Tune(quantizeFrequency(rfFrequency(tuneArea, mouse.X, sweep), clickStep))
 	}
-	wheelStep := operationWheelStep(r.digitStep, step,
+	wheelStep := operationTuningStep(r.digitStep, step,
 		rl.CheckCollisionPointRec(mouse, frequencyRect()) || rl.CheckCollisionPointRec(mouse, graph))
 	if wheelStep != 0 {
 		if delta := int64(rl.GetMouseWheelMove()); delta != 0 && state.Frequency > 0 {
@@ -559,11 +690,17 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 	if online && state.TXKnown {
 		status, shade = "RX", color.green
 	}
-	if a.ptt.TX() || online && state.TX {
+	transmitting := a.transmitting() || online && state.TX
+	if transmitting {
 		status, shade = "TX", color.red
 	}
 	statusRect := rl.NewRectangle(32, 119, 81, 52)
 	drawConsolePanel(statusRect, shade)
+	if transmitting {
+		rl.DrawRectangleRounded(statusRect, .18, 8, rl.NewColor(108, 12, 22, 255))
+		rl.DrawRectangleRoundedLinesEx(statusRect, .18, 8, 2, color.red)
+		shade = color.text
+	}
 	drawConsoleText(displayFont, status, statusRect, 37, shade)
 	mode := "MODO"
 	if online && state.ModeKnown && int(state.Mode) < len(radioModes) {
@@ -574,6 +711,9 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 		rl.DrawTriangle(rl.NewVector2(255, 139), rl.NewVector2(261, 148), rl.NewVector2(267, 139), color.amber)
 	}
 	drawText("VFO", 324, 111, 17, color.muted)
+	if r.initialVFOPending {
+		state.VFOKnown = false
+	}
 	if online && !state.VFOKnown {
 		drawText("?", 358, 110, 17, color.amber)
 	}
@@ -582,7 +722,7 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 		drawText(fmt.Sprintf("FIL%d", state.Filter), 155, 183, 15, color.muted)
 	}
 	drawText("PASO", 324, 155, 17, color.muted)
-	step := operationWheelStep(r.digitStep, tuningSteps[r.step], true)
+	step := operationTuningStep(r.digitStep, tuningSteps[r.step], true)
 	drawConsoleButton(stepRect(), fmt.Sprintf("%d Hz", step), r.digitStep != 0, false)
 	hz, exact := displayedFrequency(state, online, time.Now())
 	if r.editing {
@@ -600,18 +740,30 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 		unit = "Hz / MHz"
 	}
 	drawCenteredFitted(unit, rl.NewRectangle(932, 137, 90, 41), 20, color.muted)
-	a.drawRadioMeter(state, online)
-	a.drawRF(state, peaks, online)
-	a.drawBandButton(state, online)
-	a.drawBandPanel(state)
+	if transmitting {
+		now := time.Now()
+		readings := txReadings(state, online, now)
+		drawTXHeaderPower(readings[0])
+		a.drawTXTelemetry(readings, state, now)
+	} else {
+		r.txNeedles = txNeedles{}
+		a.drawRadioMeter(state, online)
+		a.drawRF(state, peaks, online)
+		a.drawBandButton(state, online)
+		a.drawBandPanel(state)
+	}
 	r.swr.draw(state.Frequency)
 	drawConsolePanel(rl.NewRectangle(7, 770, 1586, 123), consoleEdge)
-	a.drawConsolePTT(mouse)
+	startedAt := state.TXSince
+	if a.transmitting() {
+		startedAt = a.txSince
+	}
+	a.drawConsolePTT(mouse, transmitting, startedAt)
 	for _, x := range []int32{551, 1228} {
 		rl.DrawLine(x, 789, x, 875, consoleEdge)
 	}
 	a.drawOutputControls(state, online)
-	drawMonitorButton(operationMonitor(), a.settings.MonitorEnabled)
+	drawMonitorButton(operationMonitor(), a.monitorEnabled())
 	drawConsoleButton(operationReset(), "RESET SAFE", a.txSignal.safetyActive.Load(), false)
 	if msg := a.message; msg != "" {
 		drawText(ellipsis(msg, 100), 565, 865, 13, color.muted)
@@ -765,14 +917,16 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 	if r.texture.ID != 0 {
 		rl.DrawTexturePro(r.texture, rl.NewRectangle(.5, 0, civ.Samples-1, waterfallRows), waterfall, rl.Vector2{}, 0, rl.White)
 	}
+	a.drawBandCoverage(graph, waterfall, sweep, state.Frequency)
 	hz, exact := displayedFrequency(state, online, time.Now())
 	if hz > 0 && hz >= sweep.Low && hz <= sweep.High {
-		x := graph.X + float32(float64(hz-sweep.Low)/float64(sweep.High-sweep.Low))*graph.Width
+		x := rfFrequencyX(graph, sweep, hz)
 		shade := color.amber
 		if !exact {
 			shade = color.muted
 		}
 		rl.DrawLineEx(rl.NewVector2(x, graph.Y), rl.NewVector2(x, graph.Y+graph.Height), 3, shade)
+		rl.DrawLineEx(rl.NewVector2(x, waterfall.Y-10), rl.NewVector2(x, waterfall.Y), 2, shade)
 		rl.DrawRectangleRec(rl.NewRectangle(max(graph.X-20, min(graph.X+graph.Width-64, x-42)), 531, 84, 32), rl.NewColor(6, 19, 26, 255))
 		drawConsoleText(semiboldFont, fmt.Sprintf("%.3f", float64(hz)/1e6), rl.NewRectangle(max(graph.X-20, min(graph.X+graph.Width-64, x-42)), 531, 84, 32), 22, shade)
 	}

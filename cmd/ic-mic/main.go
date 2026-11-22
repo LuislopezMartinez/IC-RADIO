@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/swr"
 	"math"
 	"os"
 	"path/filepath"
@@ -105,10 +106,14 @@ type sampleMonitor interface {
 }
 
 func (p *testToneProcessor) Process(samples []float32) {
+	p.process(samples, p.monitor)
+}
+
+func (p *testToneProcessor) process(samples []float32, monitor sampleMonitor) {
 	if p.swrRunning.Load() {
 		clear(samples)
 		if time.Now().UnixNano() < p.swrToneUntil.Load() {
-			const step = 2 * math.Pi * swrToneHz / audio.DefaultSampleRate
+			const step = 2 * math.Pi * swr.ToneHz / audio.DefaultSampleRate
 			for i := range samples {
 				samples[i] = float32(.15 * math.Sin(p.phase))
 				p.phase += step
@@ -197,16 +202,16 @@ func (p *testToneProcessor) Process(samples []float32) {
 		p.fadeRemaining--
 	}
 	p.fadeMu.Unlock()
-	if p.monitor != nil {
+	if monitor != nil {
 		if signaling {
 			preview := make([]float32, len(samples))
 			gain := float32(p.sequencer.CueVolume())
 			for i := range samples {
 				preview[i] = samples[i] * gain
 			}
-			p.monitor.Write(preview)
+			monitor.Write(preview)
 		} else {
-			p.monitor.Write(samples)
+			monitor.Write(samples)
 		}
 	}
 }
@@ -229,10 +234,15 @@ func (p *testToneProcessor) resetSafety() {
 }
 
 type settings struct {
-	InitialVFO      string                 `json:"initial_vfo,omitempty"`
 	SWRHistory      map[byte]swrSavedSweep `json:"swr_history,omitempty"`
 	SWROverlay      bool                   `json:"swr_overlay,omitempty"`
 	CIVAddress      string                 `json:"civ_address"`
+	RemoteMode      bool                   `json:"remote_mode"`
+	RemoteHost      string                 `json:"remote_host"`
+	RemotePort      string                 `json:"remote_port"`
+	RemoteRXOutput  string                 `json:"remote_rx_output,omitempty"`
+	RemoteTXInput   string                 `json:"remote_tx_input,omitempty"`
+	RemoteMonitor   bool                   `json:"remote_monitor_enabled,omitempty"`
 	DisableCIV      bool                   `json:"disable_civ"`
 	Version         int                    `json:"version"`
 	Input           string                 `json:"input"`
@@ -374,6 +384,12 @@ func main() {
 	defer func() {
 		a.radio.swr.close()
 		a.consumeSWRReports()
+		a.closeRemoteMonitor()
+		a.stopRemoteTX()
+		a.stopRemoteAudio()
+		if a.radio.remote != nil {
+			a.radio.remote.Close()
+		}
 		_ = a.ptt.SetTX(false)
 		a.ptt.Close()
 		if a.txView.engine != nil {
@@ -442,7 +458,10 @@ func main() {
 		rxEffective.NoiseEnabled = false
 	}
 	rxProcessor.Configure(rxEffective)
-	if a.settings.RXInput != "" && a.settings.RXOutput != "" {
+	if a.settings.RemoteMode {
+		a.refreshRemoteMonitor()
+	}
+	if !a.settings.RemoteMode && a.settings.RXInput != "" && a.settings.RXOutput != "" {
 		if err := a.startRXMonitor(); err != nil {
 			a.message = "RX monitor: " + err.Error()
 		}
@@ -450,7 +469,7 @@ func main() {
 	if monitorErr != nil {
 		a.settings.MonitorEnabled = false
 		a.message = "TX monitor unavailable: " + monitorErr.Error()
-	} else if a.settings.MonitorEnabled {
+	} else if !a.settings.RemoteMode && a.settings.MonitorEnabled {
 		if err := a.startOutputMonitor(); err != nil {
 			a.settings.MonitorEnabled = false
 			a.message = "TX monitor: " + err.Error()
@@ -505,6 +524,9 @@ func (a *app) refreshDevices() {
 	a.comIndex = namedPort(a.ports, a.settings.COM)
 	if a.settings.PTTLine == ptt.DTR {
 		a.line = ptt.DTR
+	}
+	if a.settings.RemoteMode {
+		return
 	}
 	if len(a.inputs) > 0 && len(a.outputs) > 0 {
 		a.prepareTXPlayback()
@@ -594,6 +616,10 @@ func (a *app) startOutputMonitor() error {
 }
 
 func (a *app) toggleOutputMonitor() {
+	if a.settings.RemoteMode {
+		a.toggleRemoteMonitor()
+		return
+	}
 	if a.settings.MonitorEnabled {
 		a.monitor.Stop()
 		a.settings.MonitorEnabled = false
@@ -659,30 +685,45 @@ func (a *app) connectPTT() {
 		a.message = "No COM ports found"
 		return
 	}
-	if err := a.ptt.Connect(a.ports[a.comIndex].Name, a.line); err != nil {
-		a.message = err.Error()
-		return
-	}
-	a.settings.COM, a.settings.PTTLine = a.ports[a.comIndex].Name, a.line
+	a.openRadioPort(a.ports[a.comIndex].Name, false)
+}
+
+func (a *app) openRadioPort(port string, forceCIV bool) bool {
 	a.radio.session = nil
-	if !a.settings.DisableCIV {
-		session, err := a.ptt.StartCIV(a.civAddress())
-		if err != nil {
-			a.message = err.Error()
-			return
-		}
-		a.radio.session = session
-		a.radio.initialVFOPending = a.settings.InitialVFO == "A" || a.settings.InitialVFO == "B"
+	a.radio.initialVFOPending = false
+	if err := a.ptt.Connect(port, a.line); err != nil {
+		a.message = err.Error()
+		return false
 	}
+	if (forceCIV || !a.settings.DisableCIV) && !a.startRadioCIV() {
+		a.ptt.Close()
+		return false
+	}
+	a.settings.COM, a.settings.PTTLine = port, a.line
 	a.message = "PTT connected on " + a.settings.COM + " · " + string(a.line)
 	a.save()
+	return true
+}
+
+func (a *app) startRadioCIV() bool {
+	session, err := a.ptt.StartCIV(a.civAddress())
+	if err != nil {
+		a.message = err.Error()
+		return false
+	}
+	a.radio.session = session
+	a.radio.requestInitialVFO()
+	return true
 }
 
 func (a *app) toggleTX() {
-	a.setTX(!a.ptt.TX())
+	a.setTX(!a.transmitting())
 }
 
 func (a *app) setTX(enabled bool) bool {
+	if a.settings.RemoteMode {
+		return a.setRemoteTX(enabled)
+	}
 	if !a.ptt.Connected() {
 		a.message = "Connect the PTT control first"
 		a.radioState = stateError
@@ -690,6 +731,10 @@ func (a *app) setTX(enabled bool) bool {
 	}
 	if enabled && a.radio.session != nil {
 		state, online := a.radio.snapshot()
+		if state.PowerPending || state.PoweredOff {
+			a.message = "La emisora debe estar encendida para transmitir"
+			return false
+		}
 		pendingTune := !a.radio.output.tunerRequested.IsZero() &&
 			a.radio.output.tunerTarget == 2 && time.Since(a.radio.output.tunerRequested) < 2*time.Second
 		if pendingTune || online && state.Tuner == 2 {
@@ -767,12 +812,18 @@ func (a *app) setTX(enabled bool) bool {
 }
 
 func (a *app) update(mouse rl.Vector2) {
+	a.updateRemoteTX()
+	if a.radio.txAudio.active.Load() && !rl.IsWindowFocused() {
+		a.stopRemoteTX()
+	}
 	if a.updateSWR(mouse) {
 		return
 	}
 	a.applyInitialVFO()
 	if a.signalSequencer != nil && a.signalSequencer.Done() {
-		if a.signalEnding {
+		if a.radio.txAudio.active.Load() {
+			a.finishRemoteSignal()
+		} else if a.signalEnding {
 			a.setTX(false)
 		} else if a.signalPreview {
 			a.signalPreview = false
@@ -803,7 +854,9 @@ func (a *app) update(mouse rl.Vector2) {
 			a.signalSequencer.Stop()
 		}
 		a.signalEnding = true
-		if a.ptt.TX() {
+		if a.radio.txAudio.active.Load() {
+			a.stopRemoteTX()
+		} else if a.ptt.TX() {
 			a.setTX(false)
 		}
 		a.signalEnding = false
@@ -853,17 +906,22 @@ func (a *app) update(mouse rl.Vector2) {
 		return
 	}
 	if clicked(mouse, audioProfileRect(0)) {
+		a.radio.rxAudio.menu = 0
 		a.switchMode("tx")
 		return
 	}
 	if clicked(mouse, audioProfileRect(1)) {
+		a.radio.rxAudio.menu = 0
 		a.switchMode("rx")
 		return
 	}
-	if clicked(mouse, audioDeviceRect(0)) && len(a.inputs) > 0 {
+	if a.settings.RemoteMode && a.updateRemoteAudio(mouse) {
+		return
+	}
+	if !a.settings.RemoteMode && clicked(mouse, audioDeviceRect(0)) && len(a.inputs) > 0 {
 		a.openDeviceMenu, a.deviceMenuScroll = 0, initialDeviceScroll(a.inIndex, len(a.inputs))
 	}
-	if clicked(mouse, audioDeviceRect(1)) && len(a.outputs) > 0 {
+	if !a.settings.RemoteMode && clicked(mouse, audioDeviceRect(1)) && len(a.outputs) > 0 {
 		selected, count := a.outIndex, len(a.outputs)
 		if a.mode == "rx" {
 			count++
@@ -903,7 +961,7 @@ func (a *app) update(mouse rl.Vector2) {
 }
 
 func (a *app) updateDefaultRXOutput() {
-	if !a.settings.RXFollowDefault || time.Since(a.lastDefaultCheck) < time.Second {
+	if a.settings.RemoteMode || !a.settings.RXFollowDefault || time.Since(a.lastDefaultCheck) < time.Second {
 		return
 	}
 	a.lastDefaultCheck = time.Now()
@@ -1036,8 +1094,12 @@ func (a *app) updateKeyboardPTT() {
 	modifiers := (!a.settings.PTTCtrl || ctrlDown()) && (!a.settings.PTTAlt || altDown()) && (!a.settings.PTTShift || shiftDown())
 	if a.settings.PTTMode == "hold" {
 		down := modifiers && rl.IsKeyDown(key)
-		if down && !a.keyPTTActive {
+		if down && !a.keyPTTActive && (!a.settings.RemoteMode || rl.IsKeyPressed(key)) {
 			a.keyPTTActive = a.setTX(true)
+			if a.settings.RemoteMode {
+				// A failed remote transmission requires a fresh key press.
+				a.keyPTTActive = true
+			}
 		}
 		if !down && a.keyPTTActive {
 			a.setTX(false)
@@ -1751,16 +1813,16 @@ func (a *app) draw(mouse rl.Vector2) {
 	}
 	drawButton(audioProfileRect(0), "TX", a.mode == "tx")
 	drawButton(audioProfileRect(1), "RX", a.mode == "rx")
-	inputLabel, outputLabel := "ENTRADA", "SALIDA A RADIO"
-	if a.mode == "rx" {
-		inputLabel, outputLabel = "DESDE RADIO", "ALTAVOCES"
+	if a.settings.RemoteMode {
+		a.drawRemoteAudioSelectors(mouse)
+		if a.mode == "rx" {
+			status = a.radio.rxAudio.meter.snapshot()
+		} else {
+			status = a.radio.txAudio.meter.snapshot()
+		}
+	} else {
+		a.drawLocalAudioSelectors(mouse)
 	}
-	outputValue := deviceName(a.outputs, a.outIndex)
-	if a.mode == "rx" && a.settings.RXFollowDefault {
-		outputValue = "WINDOWS → " + outputValue
-	}
-	drawSelector(audioDeviceRect(0), inputLabel, deviceName(a.inputs, a.inIndex), mouse)
-	drawSelector(audioDeviceRect(1), outputLabel, outputValue, mouse)
 	a.drawSpectrum(30, 175, 1540, 190)
 	a.drawMeters(status)
 	if a.mode == "tx" {
@@ -1771,7 +1833,11 @@ func (a *app) draw(mouse rl.Vector2) {
 	a.drawTabs(mouse)
 	a.drawDSPPanel()
 	statusMessage, statusColor := a.message, dspColor.muted
-	if warning := a.audioRouteWarning(); warning != "" {
+	if a.settings.RemoteMode {
+		if statusMessage == "" {
+			statusMessage, _ = a.radio.rxAudio.status.Load().(string)
+		}
+	} else if warning := a.audioRouteWarning(); warning != "" {
 		statusMessage, statusColor = warning, dspColor.amber
 	}
 	if a.txSignal != nil && a.txSignal.safetyActive.Load() {
@@ -1780,7 +1846,9 @@ func (a *app) draw(mouse rl.Vector2) {
 	if statusMessage != "" {
 		drawText(statusMessage, 35, 870, 18, statusColor)
 	}
-	if a.openDeviceMenu >= 0 {
+	if a.settings.RemoteMode {
+		a.drawRemoteAudioMenu()
+	} else if a.openDeviceMenu >= 0 {
 		a.drawDeviceMenu(mouse)
 	}
 	if a.pttSettingsOpen {
@@ -1789,6 +1857,19 @@ func (a *app) draw(mouse rl.Vector2) {
 	if a.presetOverwrite >= 0 {
 		a.drawGlobalPresetModal()
 	}
+}
+
+func (a *app) drawLocalAudioSelectors(mouse rl.Vector2) {
+	inputLabel, outputLabel := "ENTRADA", "SALIDA A RADIO"
+	if a.mode == "rx" {
+		inputLabel, outputLabel = "DESDE RADIO", "ALTAVOCES"
+	}
+	outputValue := deviceName(a.outputs, a.outIndex)
+	if a.mode == "rx" && a.settings.RXFollowDefault {
+		outputValue = "WINDOWS → " + outputValue
+	}
+	drawSelector(audioDeviceRect(0), inputLabel, deviceName(a.inputs, a.inIndex), mouse)
+	drawSelector(audioDeviceRect(1), outputLabel, outputValue, mouse)
 }
 
 func (a *app) drawDeviceMenu(mouse rl.Vector2) {
@@ -2070,7 +2151,7 @@ func (a *app) drawMeters(status audioio.Status) {
 	drawMeter(1130, 385, 440, 185, "OUTPUT", status.OutputRMSDBFS)
 	if a.mode == "tx" {
 		drawButton(safetyResetRectangle(), "RESET SAFE", a.txSignal != nil && a.txSignal.safetyActive.Load())
-		drawMonitorButton(rl.NewRectangle(1460, 403, 82, 40), a.settings.MonitorEnabled)
+		drawMonitorButton(rl.NewRectangle(1460, 403, 82, 40), a.monitorEnabled())
 	}
 }
 

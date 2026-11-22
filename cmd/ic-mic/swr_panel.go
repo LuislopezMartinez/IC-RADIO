@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/swr"
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
-
-var swrSteps = [...]int64{10000, 50000, 100000, 500000}
 
 type swrPanel struct {
 	open, show  bool
@@ -17,9 +17,9 @@ type swrPanel struct {
 	step, count int
 	status      string
 	resultStep  int64
-	points      []swrPoint
+	points      []swr.Point
 	cancel      context.CancelFunc
-	reports     <-chan swrReport
+	reports     <-chan swr.Report
 	done        <-chan struct{}
 }
 
@@ -43,9 +43,9 @@ func (panel *swrPanel) close() {
 }
 
 type swrSavedSweep struct {
-	Step       int64      `json:"step_hz"`
-	MeasuredAt time.Time  `json:"measured_at"`
-	Points     []swrPoint `json:"points"`
+	Step       int64       `json:"step_hz"`
+	MeasuredAt time.Time   `json:"measured_at"`
+	Points     []swr.Point `json:"points"`
 }
 
 func swrBandCode(frequency int64) byte {
@@ -55,12 +55,12 @@ func swrBandCode(frequency int64) byte {
 	return 0
 }
 
-func completeSWRSweep(points []swrPoint) bool {
+func completeSWRSweep(points []swr.Point) bool {
 	if len(points) < 3 || len(points) > 13 || len(points)%2 == 0 {
 		return false
 	}
 	for _, point := range points {
-		if !point.Valid {
+		if !point.Valid && point.Failure != swr.NoTransmission && point.Failure != swr.NoReading {
 			return false
 		}
 	}
@@ -73,7 +73,10 @@ func (a *app) consumeSWRReports() {
 		select {
 		case report, ok := <-p.reports:
 			if ok {
-				p.points, p.status = report.points, report.status
+				if report.Points != nil {
+					p.points = report.Points
+				}
+				p.status = report.Status
 				continue
 			}
 			p.reports, p.cancel = nil, nil
@@ -107,14 +110,14 @@ func (a *app) updateSWR(mouse rl.Vector2) bool {
 		} else if clicked(mouse, swrPlayButton()) {
 			a.startSWR()
 		} else if clicked(mouse, swrStepButton()) {
-			p.step = (p.step + 1) % len(swrSteps)
+			p.step = (p.step + 1) % len(swr.Steps)
 		} else if clicked(mouse, swrCountButton()) {
 			p.count = (p.count + 1) % 6
 		}
 		return true
 	}
 	if a.radio.page != pageOperation || a.radio.editing || a.radio.modeMenu || a.radio.bands.open ||
-		!a.radio.bands.requestAt.IsZero() || a.pttSettingsOpen || a.ptt.TX() {
+		!a.radio.bands.requestAt.IsZero() || a.pttSettingsOpen || a.transmitting() {
 		return false
 	}
 	if clicked(mouse, swrOverlayButton()) {
@@ -132,20 +135,6 @@ func (a *app) updateSWR(mouse rl.Vector2) bool {
 	return false
 }
 
-// Limit automatic tone sweeps to supported amateur-band windows.
-func validSWRRange(first, last int64) bool {
-	for _, limits := range [][2]int64{
-		{1810000, 1850000}, {3500000, 3800000}, {7000000, 7200000},
-		{10100000, 10150000}, {14000000, 14350000}, {18068000, 18168000},
-		{21000000, 21450000}, {24890000, 24990000}, {28000000, 29700000}, {50000000, 52000000},
-	} {
-		if first > limits[0] && last < limits[1] {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *swrPanel) openSavedSweep(center int64) {
 	saved, ok := p.history[swrBandCode(center)]
 	if center <= 0 {
@@ -159,7 +148,7 @@ func (p *swrPanel) openSavedSweep(center int64) {
 		p.points, p.resultStep, p.status = nil, 0, ""
 		return
 	}
-	for i, step := range swrSteps {
+	for i, step := range swr.Steps {
 		if step == saved.Step {
 			p.step, p.count = i, (13-len(saved.Points))/2
 			p.resultStep, p.points = saved.Step, saved.Points
@@ -172,7 +161,7 @@ func (p *swrPanel) openSavedSweep(center int64) {
 func (a *app) startSWR() {
 	p := &a.radio.swr
 	state, online := a.radio.snapshot()
-	if !online || !state.TXKnown || state.TX || a.ptt.TX() || state.Frequency <= 0 {
+	if !online || state.PowerPending || !state.TXKnown || state.TX || a.transmitting() || state.Frequency <= 0 {
 		p.status = "Conecta el Icom y deja la emisora en RX"
 		return
 	}
@@ -180,21 +169,47 @@ func (a *app) startSWR() {
 		p.status = "Selecciona USB o LSB con modulacion de audio USB"
 		return
 	}
-	if a.txView.engine == nil || !a.txView.engine.Status().Running ||
-		!isRadioUSBCodec(deviceName(a.txView.outputs, a.txView.outIndex)) {
+	client := a.radio.remote
+	session, local := a.radio.session.(*civ.Session)
+	if client == nil && (!local || a.txView.engine == nil || !a.txView.engine.Status().Running ||
+		!isRadioUSBCodec(deviceName(a.txView.outputs, a.txView.outIndex))) {
 		p.status = "Selecciona USB Audio CODEC como salida en Audio TX"
 		return
 	}
-	points := swrFrequencies(state.Frequency, swrSteps[p.step], 13-2*p.count)
-	if !validSWRRange(points[0].Hz, points[len(points)-1].Hz) {
-		p.status = "El rango sale de una banda admitida por el test"
+	request := swr.Request{Center: state.Frequency, Step: swr.Steps[p.step], Count: 13 - 2*p.count}
+	points := request.ValidatedPoints()
+	if points == nil {
+		p.status = "El rango supera los límites de sintonía"
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	reports, done := make(chan swrReport, 16), make(chan struct{})
-	p.points, p.status, p.cancel, p.reports, p.done = append([]swrPoint(nil), points...), "Preparando barrido", cancel, reports, done
-	p.resultStep = swrSteps[p.step]
-	go runSWR(ctx, a.radio.session, &a.ptt, a.txSignal, state, points, reports, done)
+	reports, done := make(chan swr.Report, 16), make(chan struct{})
+	p.points, p.status, p.cancel, p.reports, p.done = append([]swr.Point(nil), points...), "Preparando barrido", cancel, reports, done
+	p.resultStep = request.Step
+	go func() {
+		defer close(done)
+		defer close(reports)
+		send := func(report swr.Report) { reports <- report }
+		if client != nil {
+			err := client.Sweep(ctx, request, send)
+			switch {
+			case ctx.Err() != nil:
+				send(swr.Report{Status: "Barrido cancelado"})
+			case err != nil:
+				send(swr.Report{Status: "Error de ROE: " + err.Error()})
+			}
+			return
+		}
+		a.txSignal.swrRunning.Store(true)
+		defer a.txSignal.swrRunning.Store(false)
+		swr.Run(ctx, session, &a.ptt, func(duration time.Duration) {
+			var until int64
+			if duration > 0 {
+				until = time.Now().Add(duration).UnixNano()
+			}
+			a.txSignal.swrToneUntil.Store(until)
+		}, state, points, send)
+	}()
 }
 
 func (p *swrPanel) drawButtons() {
@@ -214,10 +229,10 @@ func (p *swrPanel) draw(center int64) {
 		return
 	}
 	drawConsolePanel(rl.NewRectangle(281, 419, 1030, 331), consoleEdge)
-	drawText("SWR GRAPH", 309, 433, 27, color.text)
+	drawText("BARRIDO DE ROE", 309, 433, 27, color.text)
 	drawConsoleButtonSize(swrCloseButton(), "X", false, false, 15)
 	rl.DrawLine(304, 472, 1292, 472, consoleEdge)
-	drawConsoleButton(swrStepButton(), fmt.Sprintf("STEP  %d kHz", swrSteps[p.step]/1000), false, false)
+	drawConsoleButton(swrStepButton(), fmt.Sprintf("STEP  %d kHz", swr.Steps[p.step]/1000), false, false)
 	drawConsoleButton(swrCountButton(), fmt.Sprintf("BAR  %d", 13-2*p.count), false, false)
 
 	play := "INICIAR"
@@ -225,10 +240,15 @@ func (p *swrPanel) draw(center int64) {
 		play = "DETENER"
 	}
 	drawConsoleButton(swrPlayButton(), play, p.cancel != nil, true)
-	preview := swrFrequencies(center, swrSteps[p.step], 13-2*p.count)
+	preview := swr.Frequencies(center, swr.Steps[p.step], 13-2*p.count)
 	points := p.points
-	if len(points) != len(preview) || p.resultStep != swrSteps[p.step] {
+	if len(points) != len(preview) || p.resultStep != swr.Steps[p.step] ||
+		p.cancel == nil && center > 0 && points[len(points)/2].Hz != center {
 		points = preview
+	}
+	if points[0].Hz > 0 {
+		rangeLabel := fmt.Sprintf("Rango a medir   %s–%s MHz", swrMHz(points[0].Hz), swrMHz(points[len(points)-1].Hz))
+		drawConsoleText(semiboldFont, rangeLabel, rl.NewRectangle(620, 430, 580, 36), 20, color.text)
 	}
 	middle := len(points) / 2
 	drawText("CENTRO", 306, 501, 15, color.muted)
@@ -259,13 +279,15 @@ func (p *swrPanel) draw(center int64) {
 		x := graph.X + (float32(i)+.5)*width
 		rl.DrawLineV(rl.NewVector2(x, base), rl.NewVector2(x, base+5), color.muted)
 		if point.Valid {
-			y := swrY(graph, swrRatio(point.Raw))
+			y := swrY(graph, swr.Ratio(point.Raw))
 			bar := width * .68
 			low := max(threshold, y)
 			rl.DrawRectangleRec(rl.NewRectangle(x-bar/2, min(low, base-2), bar, max(2, base-low)), swrCool)
 			if y < threshold {
 				rl.DrawRectangleRec(rl.NewRectangle(x-bar/2, y, bar, threshold-y), swrWarm)
 			}
+		} else {
+			drawSWRFailure(point.Failure, x, base-10)
 		}
 		if point.Hz > 0 && (i == 0 || i == middle || i == len(points)-1) {
 			shade := color.muted
@@ -276,7 +298,32 @@ func (p *swrPanel) draw(center int64) {
 		}
 	}
 	rl.DrawLineEx(rl.NewVector2(graph.X, threshold), rl.NewVector2(graph.X+graph.Width, threshold), 1.6, color.red)
-	drawText(p.status, 306, 710, 17, color.text)
+	rl.DrawRectangle(530, 700, 12, 12, swrCool)
+	drawText("ROE medida", 550, 697, 16, color.text)
+	drawSWRFailure(swr.NoTransmission, 698, 706)
+	drawText("Sin transmisión", 711, 697, 16, color.text)
+	drawSWRFailure(swr.NoReading, 902, 706)
+	drawText("Sin lectura de ROE", 915, 697, 16, color.text)
+	drawText(p.status, 306, 726, 17, color.text)
+}
+
+func swrMHz(hz int64) string {
+	fraction := fmt.Sprintf("%06d", hz%1000000)
+	return fmt.Sprintf("%d,%s%s", hz/1000000, fraction[:3], strings.TrimRight(fraction[3:], "0"))
+}
+
+func drawSWRFailure(failure swr.PointFailure, x, y float32) {
+	switch failure {
+	case swr.NoTransmission:
+		top := rl.NewVector2(x, y-7)
+		left, right := rl.NewVector2(x-7, y+5), rl.NewVector2(x+7, y+5)
+		rl.DrawLineEx(top, left, 2, color.amber)
+		rl.DrawLineEx(left, right, 2, color.amber)
+		rl.DrawLineEx(right, top, 2, color.amber)
+	case swr.NoReading:
+		rl.DrawLineEx(rl.NewVector2(x-5, y-5), rl.NewVector2(x+5, y+5), 2, color.muted)
+		rl.DrawLineEx(rl.NewVector2(x+5, y-5), rl.NewVector2(x-5, y+5), 2, color.muted)
+	}
 }
 
 func swrScaleLabel(ratio float64) string {
@@ -372,9 +419,9 @@ func (p *swrPanel) overlay(graph rl.Rectangle, sweep civ.Sweep) {
 		labelY := max(graph.Y, min(graph.Y+graph.Height-18, y-9))
 		drawConsoleText(semiboldFont, swrScaleLabel(ratio), rl.NewRectangle(scale.X+12, labelY, 46, 18), 14, color.text)
 	}
-	position := func(point swrPoint) rl.Vector2 {
+	position := func(point swr.Point) rl.Vector2 {
 		x := graph.X + graph.Width*float32(float64(point.Hz-sweep.Low)/float64(sweep.High-sweep.Low))
-		return rl.NewVector2(x, swrY(graph, swrRatio(point.Raw)))
+		return rl.NewVector2(x, swrY(graph, swr.Ratio(point.Raw)))
 	}
 	for _, saved := range p.history {
 		if completeSWRSweep(saved.Points) {
@@ -383,7 +430,7 @@ func (p *swrPanel) overlay(graph rl.Rectangle, sweep civ.Sweep) {
 	}
 }
 
-func drawSWRPoints(points []swrPoint, graph rl.Rectangle, right float32, position func(swrPoint) rl.Vector2) {
+func drawSWRPoints(points []swr.Point, graph rl.Rectangle, right float32, position func(swr.Point) rl.Vector2) {
 	for i, point := range points {
 		if !point.Valid {
 			continue
@@ -393,7 +440,7 @@ func drawSWRPoints(points []swrPoint, graph rl.Rectangle, right float32, positio
 			drawSWRSegment(position(points[i-1]), pos, graph, right)
 		}
 		if pos.X >= graph.X && pos.X < right {
-			rl.DrawCircleV(pos, 3, swrZoneColors[swrZone(swrRatio(point.Raw))])
+			rl.DrawCircleV(pos, 3, swrZoneColors[swrZone(swr.Ratio(point.Raw))])
 		}
 	}
 }

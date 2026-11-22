@@ -2,12 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/swr"
 	"testing"
 	"time"
 )
 
 func TestSavedSWRResultsRoundTrip(t *testing.T) {
-	points := swrFrequencies(14178000, 10000, 13)
+	points := swr.Frequencies(14178000, 10000, 13)
 	for i := range points {
 		points[i].Valid, points[i].Raw, points[i].Power = true, i+12, 60
 	}
