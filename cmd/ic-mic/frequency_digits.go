@@ -37,20 +37,8 @@ func frequencyGlyphs(hz int64) []frequencyGlyph {
 	return glyphs
 }
 
-func drawFrequencyDigits(hz, selected int64) {
-	for _, glyph := range frequencyGlyphs(hz) {
-		shade := color.text
-		if selected > 0 && glyph.step == selected {
-			shade = color.amber
-			rl.DrawRectangle(int32(glyph.cell.X+5), 194, int32(glyph.cell.Width-10), 2, shade)
-		}
-		drawDialGlyph(glyph, shade)
-	}
-}
-
-func drawDialGlyph(glyph frequencyGlyph, shade rl.Color) {
+func drawDialGlyph(glyph frequencyGlyph, shade rl.Color, size float32) {
 	const spacing = 0
-	size := float32(88)
 	width := rl.MeasureTextEx(semiboldFont, glyph.text, size, spacing).X
 	if width > glyph.cell.Width-1 {
 		size *= (glyph.cell.Width - 1) / width

@@ -2852,7 +2852,7 @@ func latinCodepoints() []rune {
 	for value := rune(32); value <= 255; value++ {
 		result = append(result, value)
 	}
-	return append(result, '…', '⌄', '·', '✓', '▲', '▼', '—', '–', '±', '▾', '→')
+	return append(result, '…', '⌄', '·', '✓', '▲', '▼', '—', '–', '±', '▾', '→', 'Δ')
 }
 
 func clicked(mouse rl.Vector2, r rl.Rectangle) bool {

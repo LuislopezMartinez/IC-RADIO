@@ -46,6 +46,7 @@ func (r *sweepTestRadio) ReadPower() bool {
 	defer r.mu.Unlock()
 	replyAt := time.Now().Add(time.Millisecond)
 	r.state.PowerAt, r.state.SplitAt = replyAt, replyAt
+	r.state.Tuning.DeltaTXAt = replyAt
 	return true
 }
 

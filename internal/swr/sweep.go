@@ -166,9 +166,11 @@ func Run(ctx context.Context, radio Radio, keyer Keyer, setTone func(time.Durati
 		status = "No se pudo consultar la potencia"
 		return
 	}
-	state, ok := swrWaitFor(ctx, radio, 1500*time.Millisecond, func(s civ.State) bool { return s.PowerAt.After(at) && s.SplitAt.After(at) && s.TXKnown && !s.TX })
-	if !ok || state.Split {
-		status = "El test necesita RX con SPLIT desactivado"
+	state, ok := swrWaitFor(ctx, radio, 1500*time.Millisecond, func(s civ.State) bool {
+		return s.PowerAt.After(at) && s.SplitAt.After(at) && s.Tuning.DeltaTXAt.After(at) && s.TXKnown && !s.TX
+	})
+	if !ok || state.Split || state.Tuning.DeltaTX {
+		status = "El test necesita RX con SPLIT y Delta TX desactivados"
 		return
 	}
 	original = state.PowerSetting
@@ -202,7 +204,7 @@ func Run(ctx context.Context, radio Radio, keyer Keyer, setTone func(time.Durati
 		}
 		changedFrequency = true
 		_, ok = swrWaitFor(ctx, radio, 1200*time.Millisecond, func(s civ.State) bool {
-			return s.FrequencyAt.After(at) && s.Frequency == vfo && s.TXKnown && !s.TX && !s.Split && s.Mode == initial.Mode
+			return s.FrequencyAt.After(at) && s.Frequency == vfo && s.TXKnown && !s.TX && !s.Split && !s.Tuning.DeltaTX && s.Mode == initial.Mode
 		})
 		if !ok || ctx.Err() != nil {
 			status = "El Icom no ha confirmado la frecuencia de prueba"
@@ -248,7 +250,7 @@ func swrCapture(ctx context.Context, radio Radio, keyed time.Time, vfo int64, mo
 	swrWait(limit, radio, func(s civ.State) bool {
 		poAt := s.MeterAt[0x11]
 		pow := s.Meters[0x11]
-		if s.Frequency != vfo || s.Mode != mode || s.Split || (poAt.After(keyed) && pow > 115) {
+		if s.Frequency != vfo || s.Mode != mode || s.Split || s.Tuning.DeltaTX || (poAt.After(keyed) && pow > 115) {
 			stopped = true
 			return true
 		}

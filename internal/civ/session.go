@@ -34,6 +34,8 @@ type State struct {
 	PowerSetting           int
 	PowerAt, SplitAt, TXAt time.Time
 	Split                  bool
+	Tuning                 TuningState
+	IF                     FilterState
 	VFO                    byte
 	VFOKnown               bool
 	VFOAt                  time.Time
@@ -345,7 +347,7 @@ func (s *Session) run(port Port) {
 				poweringOn, powerSent = on, now
 				readback = nil
 			case request := <-s.requests:
-				if live && !state.PowerPending && !state.TX && (state.TXKnown || request[0] == 0x27) {
+				if live && !state.PowerPending && !state.TX && (state.TXKnown || request[0] == 0x27) && !(s.swrMeter.Load() && isTuningChange(request[0])) {
 					cmd = request
 					readback = commandReadback(request)
 				}
@@ -431,7 +433,7 @@ var txTelemetryPoll = [...][]byte{
 	{0x15, 0x11}, {0x1c, 1},
 }
 
-var swrMeasurementPoll = [...][]byte{{0x15, 0x11}, {0x15, 0x12}, {0x1c, 0}, {0x15, 0x11}, {0x15, 0x12}, {0x03}, {0x0f}, {0x04}}
+var swrMeasurementPoll = [...][]byte{{0x15, 0x11}, {0x15, 0x12}, {0x1c, 0}, {0x15, 0x11}, {0x15, 0x12}, {0x03}, {0x0f}, {0x21, 2}, {0x04}}
 
 type pollKind int
 
@@ -443,6 +445,15 @@ const (
 	pollRX
 	pollPower
 	pollTuner
+	pollSplit
+	pollOffset
+	pollRIT
+	pollDeltaTX
+	pollOtherVFO
+	pollFilterMode
+	pollFilterWidth
+	pollPBT1
+	pollPBT2
 )
 
 // Interleave receiver controls with frequency, TX status and meter reads.
@@ -451,7 +462,8 @@ var pollPlan = [...]pollKind{
 	pollFrequency, pollRX, pollTX, pollRX,
 	pollFrequency, pollMeter, pollRX, pollMode,
 	pollFrequency, pollRX, pollTX, pollMeter,
-	pollFrequency, pollPower, pollTuner, pollMeter,
+	pollFrequency, pollPower, pollTuner, pollMeter, pollSplit, pollOffset, pollFrequency, pollRIT, pollDeltaTX, pollTX, pollOtherVFO,
+	pollFrequency, pollFilterMode, pollFilterWidth, pollRX, pollPBT1, pollPBT2,
 }
 
 func readyForCommand(elapsed time.Duration, answered bool) bool {
@@ -462,10 +474,24 @@ func commandReadback(command []byte) []byte {
 	switch command[0] {
 	case 5, 7:
 		return []byte{3}
-	case 6, 0x26:
+	case 6:
 		return []byte{4}
-	case 0x11:
-		return command[:1]
+	case 0x26:
+		if len(command) > 2 {
+			return command[:2]
+		}
+	case 0x1a:
+		if len(command) == 3 && command[1] == 3 {
+			return command[:2]
+		}
+	case 0x0f, 0x11:
+		if len(command) > 1 {
+			return command[:1]
+		}
+	case 0x21, 0x25:
+		if len(command) > 2 {
+			return command[:2]
+		}
 	case 0x1c:
 		if len(command) == 3 && command[1] == 1 {
 			return command[:2]
@@ -489,6 +515,8 @@ func (s *Session) confirmVFOCommand(command []byte, now time.Time) {
 	switch command[1] {
 	case 0, 1:
 		s.state.VFO, s.state.VFOKnown, s.state.VFOAt = command[1], true, now
+		s.state.Tuning.OtherVFOAt = time.Time{}
+		s.state.IF = FilterState{}
 	case 0xa0:
 		s.state.VFOEqualizedAt = now
 	}
@@ -501,11 +529,13 @@ func (s *Session) isReply(frame, command []byte) bool {
 	data := frame[2:]
 	if len(data) == 1 && (data[0] == 0xfb || data[0] == 0xfa) {
 		switch command[0] {
-		case 5, 6, 7, 0x18, 0x26:
+		case 5, 6, 7, 0x18:
 			return true
-		case 0x11:
+		case 0x0f, 0x11:
 			return len(command) == 2
-		case 0x14, 0x16, 0x1c, 0x27:
+		case 0x1a:
+			return len(command) == 3 && command[1] == 3
+		case 0x14, 0x16, 0x1c, 0x21, 0x25, 0x26, 0x27:
 			return len(command) > 2
 		}
 		return false
@@ -515,6 +545,24 @@ func (s *Session) isReply(frame, command []byte) bool {
 
 func (s *Session) pollCommand(kind pollKind, transmitting bool) []byte {
 	switch kind {
+	case pollFilterMode:
+		return []byte{0x26, 0}
+	case pollFilterWidth:
+		return []byte{0x1a, 3}
+	case pollPBT1:
+		return []byte{0x14, 7}
+	case pollPBT2:
+		return []byte{0x14, 8}
+	case pollSplit:
+		return []byte{0x0f}
+	case pollOffset:
+		return []byte{0x21, 0}
+	case pollRIT:
+		return []byte{0x21, 1}
+	case pollDeltaTX:
+		return []byte{0x21, 2}
+	case pollOtherVFO:
+		return []byte{0x25, 1}
 	case pollFrequency:
 		return []byte{0x03}
 	case pollMode:
@@ -561,10 +609,25 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 			return
 		}
 		state.Mode, state.ModeKnown = data[1], true
+		if data[1] != state.IF.Mode || len(data) >= 3 && data[2] != state.IF.Slot {
+			state.IF = FilterState{}
+		}
 		if len(data) >= 3 {
 			state.Filter = data[2]
 		}
+	case 0x26:
+		if len(data) != 5 || data[1] != 0 || data[2] > 8 || data[3] > 1 || data[4] < 1 || data[4] > 3 {
+			return
+		}
+		state.IF.syncMode(data[2], data[3], data[4], now)
+		state.Mode, state.ModeKnown, state.Filter = data[2], true, data[4]
 	case 0x1a:
+		if len(data) == 3 && data[1] == 3 {
+			if !state.IF.receiveWidth(data[2], now) {
+				return
+			}
+			break
+		}
 		if len(data) < 12 || data[1] != 1 || data[3] < 1 || data[3] > 3 {
 			return
 		}
@@ -592,8 +655,12 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 		default:
 			return
 		}
+	case 0x21, 0x25:
+		if !state.Tuning.receive(data, now) {
+			return
+		}
 	case 0x0f:
-		if len(data) != 2 {
+		if len(data) != 2 || data[1] > 1 {
 			return
 		}
 		state.Split, state.SplitAt = data[1] != 0, now
@@ -612,6 +679,9 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 			state.RX[RFGain] = RXValue{byte(level), now}
 		case 3:
 			state.RX[Squelch] = RXValue{byte(level), now}
+		case 7, 8:
+			index := data[1] - 7
+			state.IF.PBT[index], state.IF.PBTAt[index] = int(level), now
 		case 0x0a:
 			state.PowerSetting, state.PowerAt = int(level), now
 		default:

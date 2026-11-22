@@ -54,6 +54,13 @@ type radioPanel struct {
 	zoom                                  rfVerticalZoom
 	input                                 string
 	editing, modeMenu, cancelled          bool
+	editTX                                bool
+	editOffset                            bool
+	editFilterWidth                       bool
+	ifFilter                              radioFilterPanel
+	offsetSent                            time.Time
+	offsetTarget                          int
+	lastRXHz, lastTXHz                    int64
 	texture                               rl.Texture2D
 	pixels                                []rl.Color
 	lastSweep                             civ.Sweep
@@ -82,6 +89,9 @@ func (r *radioPanel) cancelInput() {
 	r.remoteEdit = 0
 	r.cancelled = r.editing
 	r.editing, r.modeMenu = false, false
+	r.editOffset, r.editTX = false, false
+	r.editFilterWidth = false
+	r.ifFilter = radioFilterPanel{}
 	r.bands = bandSelector{}
 	r.output.dragging = false
 }
@@ -106,9 +116,9 @@ func audioDeviceRect(index int) rl.Rectangle {
 	}
 	return rl.NewRectangle(855, 92, 715, 64)
 }
-func frequencyRect() rl.Rectangle { return rl.NewRectangle(542, 96, 483, 105) }
+func frequencyRect() rl.Rectangle { return rxDial }
 func modeRect() rl.Rectangle      { return rl.NewRectangle(139, 118, 144, 54) }
-func stepRect() rl.Rectangle      { return rl.NewRectangle(385, 148, 125, 35) }
+func stepRect() rl.Rectangle      { return rl.NewRectangle(369, 148, 64, 35) }
 func modeOption(index int) rl.Rectangle {
 	return rl.NewRectangle(44+float32(index%3)*108, 187+float32(index/3)*42, 101, 37)
 }
@@ -515,13 +525,25 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 	}
 	state, online := r.snapshot()
 	canTune := online && state.TXKnown && !state.TX && !state.PowerPending
+	canAdjustFilter := canTune && !a.transmitting() && r.swr.cancel == nil
 	defer func() {
 		if !canTune || a.transmitting() || r.editing || r.modeMenu || r.bands.open || !r.bands.requestAt.IsZero() {
 			r.wheel = wheelTuning{}
 		} else if r.wheel.target != 0 {
-			r.wheel.update(time.Now(), state, r.session.Tune)
+			display := state
+			display.Frequency = rxTuningFrequency(state, time.Now())
+			r.wheel.update(time.Now(), display, func(hz int64) bool { return r.commitTuning(state, hz) })
 		}
 	}()
+	if !r.editing && r.ifFilter.open && rl.CheckCollisionPointRec(mouse, filterMenu) &&
+		a.updateRadioFilter(mouse, state, canAdjustFilter) {
+		r.wheel = wheelTuning{}
+		return
+	}
+	if r.ifFilter.drag.active && a.updateFilterEdge(mouse, state, canAdjustFilter) {
+		r.wheel = wheelTuning{}
+		return
+	}
 	if a.updateReceiverControls(mouse, state, online && state.TXKnown && !state.TX && !state.PowerPending &&
 		!a.transmitting() && !r.editing && !r.modeMenu && !r.bands.open && r.bands.requestAt.IsZero()) {
 		return
@@ -530,6 +552,14 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 		return
 	}
 	if r.editing {
+		if r.editOffset {
+			a.editTuningOffset(canTune && !a.transmitting() && r.swr.cancel == nil)
+			return
+		}
+		if r.editFilterWidth {
+			a.editRadioFilterWidth(state, canAdjustFilter)
+			return
+		}
 		r.collectInput("0123456789.,", 12)
 		if rl.IsKeyPressed(rl.KeyEnter) {
 			text := strings.ReplaceAll(r.input, ",", ".")
@@ -540,8 +570,8 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 			if strings.Contains(text, ".") {
 				value *= 1000000
 			}
-			if err == nil && online && state.TXKnown && !state.TX && !a.ptt.TX() && r.session.Tune(int64(math.Round(value))) {
-				r.editing = false
+			if err == nil && canTune && !a.transmitting() && r.swr.cancel == nil && r.commitTuning(state, int64(math.Round(value))) {
+				r.editing, r.editTX = false, false
 			} else {
 				a.message = "Frecuencia no válida o sintonía no disponible"
 			}
@@ -613,17 +643,31 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 	if a.updateRadioButtons(mouse, state) {
 		return
 	}
+	if canTune && r.swr.cancel == nil && a.updateSplitTuning(mouse, state) {
+		return
+	}
+	if a.updateRadioFilter(mouse, state, canAdjustFilter) {
+		r.wheel = wheelTuning{}
+		return
+	}
+	if a.updateFilterEdge(mouse, state, canAdjustFilter) {
+		r.wheel = wheelTuning{}
+		return
+	}
 	if rl.CheckCollisionPointRec(mouse, frequencyRect()) && !a.keyPTTActive {
 		if rl.IsMouseButtonPressed(rl.MouseRightButton) {
-			r.editing, r.input = true, ""
+			r.editing, r.editTX, r.input = true, false, ""
 			return
 		}
 		if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
 			shown, _ := r.shownFrequency(state, online, time.Now())
-			if digit := frequencyDigitAt(shown, mouse); digit != 0 {
+			if rx, _ := state.EffectiveTuning(time.Now()); rx > 0 && r.wheel.target == 0 {
+				shown = rx
+			}
+			if digit := splitDigitAt(shown, mouse); digit != 0 {
 				r.digitStep = digit
 			} else {
-				r.editing, r.input = true, ""
+				r.editing, r.editTX, r.input = true, false, ""
 				return
 			}
 		}
@@ -641,12 +685,12 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 			tuneArea = waterfall
 		}
 		clickStep := operationTuningStep(r.digitStep, step, true)
-		r.session.Tune(quantizeFrequency(rfFrequency(tuneArea, mouse.X, sweep), clickStep))
+		r.commitTuning(state, quantizeFrequency(rfFrequency(tuneArea, mouse.X, sweep), clickStep))
 	}
 	wheelStep := operationTuningStep(r.digitStep, step,
 		rl.CheckCollisionPointRec(mouse, frequencyRect()) || rl.CheckCollisionPointRec(mouse, graph))
 	if delta := rl.GetMouseWheelMove(); canTune && wheelStep != 0 && delta != 0 && state.Frequency > 0 {
-		r.wheel.queue(time.Now(), state.Frequency, wheelStep, float64(delta))
+		r.wheel.queue(time.Now(), rxTuningFrequency(state, time.Now()), wheelStep, float64(delta))
 	}
 }
 
@@ -739,28 +783,18 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 		drawText("?", 358, 110, 17, color.amber)
 	}
 	drawVFOButtons(state, online)
+	filterLabel := "FILTRO RX"
 	if online && state.Filter > 0 {
-		drawText(fmt.Sprintf("FIL%d", state.Filter), 155, 183, 15, color.muted)
+		filterLabel = fmt.Sprintf("FIL%d", state.Filter)
+		if widthAvailable(state.IF, time.Now()) && state.IF.Slot == state.Filter {
+			filterLabel = fmt.Sprintf("FIL%d · %d Hz", state.Filter, state.IF.WidthHz)
+		}
 	}
+	drawConsoleButton(filterButton, filterLabel, r.ifFilter.open, false)
 	drawText("PASO", 324, 155, 17, color.muted)
 	step := operationTuningStep(r.digitStep, tuningSteps[r.step], true)
 	drawConsoleButton(stepRect(), fmt.Sprintf("%d Hz", step), r.digitStep != 0, false)
-	hz, exact := r.shownFrequency(state, online, time.Now())
-	if r.editing {
-		drawCenteredFitted(r.input+"_", rl.NewRectangle(552, 103, 378, 96), 68, color.text)
-	} else if hz > 0 {
-		drawFrequencyDigits(hz, r.digitStep)
-	} else {
-		drawCenteredFitted("— — —", rl.NewRectangle(552, 103, 378, 96), 68, color.text)
-	}
-	unit := "MHz"
-	if hz > 0 && !exact {
-		unit = "MHz · centro RF"
-	}
-	if r.editing {
-		unit = "Hz / MHz"
-	}
-	drawCenteredFitted(unit, rl.NewRectangle(932, 137, 90, 41), 20, color.muted)
+	r.drawSplitTuning(state, online, transmitting, mouse)
 	if transmitting {
 		now := time.Now()
 		readings := txReadings(state, online, now)
@@ -769,8 +803,9 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 	} else {
 		r.txNeedles = txNeedles{}
 		a.drawRadioMeter(state, online)
-		a.drawRF(state, peaks, online)
+		a.drawRF(state, peaks, online, mouse)
 		a.drawBandButton(state, online)
+		r.drawFilterMenu(state)
 		a.drawBandPanel(state)
 		if r.receiver.agcOpen {
 			for i := 1; i < len(agcLabels); i++ {
@@ -866,7 +901,7 @@ func (a *app) drawRadioMeter(state civ.State, online bool) {
 	}
 }
 
-func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
+func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool, mouse rl.Vector2) {
 	r := &a.radio
 	drawCutPanel(rl.NewRectangle(7, 225, 1586, 533), 11, color.panel, rl.NewColor(120, 29, 42, 255), 1.5)
 	r.swr.drawButtons()
@@ -953,8 +988,14 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool) {
 		rl.DrawTexturePro(r.texture, rl.NewRectangle(.5, 0, civ.Samples-1, waterfallRows), waterfall, rl.Vector2{}, 0, rl.White)
 	}
 	hz, exact := r.shownFrequency(state, online, time.Now())
+	rx, tx := state.EffectiveTuning(time.Now())
+	if rx > 0 {
+		hz, exact = rx, true
+	}
+	r.drawFilterEdge(state, rx, mouse)
 	a.drawBandCoverage(graph, waterfall, sweep, state.Frequency, hz, exact)
 	r.swr.overlay(graph, sweep)
+	drawSplitMarkers(graph, waterfall, sweep, state, rx, tx)
 }
 
 func displayedFrequency(state civ.State, online bool, now time.Time) (hz int64, exact bool) {

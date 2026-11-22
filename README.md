@@ -4,7 +4,7 @@ RX/TX audio console for USB-equipped transceivers, featuring real-time DSP and
 PTT control through RTS or DTR. IC-RADIO lets you use an external USB
 microphone, process your voice, and route it to the radio USB audio input.
 
-![IC-RADIO Operation view showing the receiver controls and RF spectrum panel](assets/screenshots/ic-radio-interface.png)
+![IC-RADIO Operation view showing the SPLIT, RIT, Delta TX, and RX filter controls](assets/screenshots/ic-radio-interface.png)
 
 ![IC-RADIO Audio view showing TX routing, meters, and filters](assets/screenshots/ic-radio-audio.jpg)
 
@@ -91,9 +91,16 @@ In **Operación**, use **RF POWER** to adjust the radio's output setting over CI
 
 Use **RF GAIN**, **AF GAIN**, **SQL**, and **AGC** in Operación to adjust the IC-7300 receiver over CI-V. The **A=B** control asks for confirmation before sending the command to the radio. Band edge indicators mark the selected band on the RF display.
 
+### Separate RX and TX tuning
+
+**SPLIT** uses separate receive and transmit VFOs. **RIT** applies the offset to receive, and **ΔTX** applies it to transmit. Click the offset value for direct entry, use the wheel or the − and + controls to adjust it, and press **0** to clear it. The spectrum shows RX and TX markers when the radio reports both frequencies.
+
+Open **FILTRO RX** to select FIL1, FIL2, or FIL3 and adjust the IF bandwidth when the radio reports it for the current mode. In SSB, the outer passband edge can also be dragged on the spectrum when available.
+
+
 ### SWR measurements
 
-Open **TEST** in the spectrum controls to see the SWR graph and select the frequency step and number of points. Center the radio on the frequency you want to measure. The sweep requires the IC-7300 in receive, USB or LSB with USB modulation, and **USB Audio CODEC** as the Audio TX output. The sweep transmits a test tone. Use a suitable antenna or dummy load and check that the sweep frequencies are clear and allowed before pressing **INICIAR**. Press **DETENER** or Escape to cancel.
+Open **TEST** in the spectrum controls to see the SWR graph and select the frequency step and number of points. Center the radio on the frequency you want to measure. The sweep requires the IC-7300 in receive, with SPLIT and ΔTX off, USB or LSB with USB modulation, and **USB Audio CODEC** as the Audio TX output. The sweep transmits a test tone. Use a suitable antenna or dummy load and check that the sweep frequencies are clear and allowed before pressing **INICIAR**. Press **DETENER** or Escape to cancel.
 
 Completed sweeps are saved per band. Use **SWR** to overlay the saved sweep on the RF spectrum.
 

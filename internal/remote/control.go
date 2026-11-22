@@ -15,12 +15,18 @@ import (
 
 // Radio is the control surface shared by the USB and network connections.
 type Radio interface {
+	SetSplit(bool) bool
+	SetIncrementalTuning(bool, bool) bool
+	SetTuningOffset(int) bool
+	TuneOtherVFO(int64) bool
 	Snapshot() civ.State
 	TakeDisplaySnapshot() (civ.State, [civ.Samples]byte)
 	EnsureRadioOn() bool
 	SetRadioPower(bool) bool
 	Tune(int64) bool
 	SetMode(byte) bool
+	SetFilterSlot(byte) bool
+	SetFilterWidth(int) bool
 	SetSpan(int64) bool
 	SetScopeCenter() bool
 	SelectMeter(byte)
@@ -121,10 +127,22 @@ func (cmd request) apply(r Radio) bool {
 		return r.EnsureRadioOn()
 	case "shutdown":
 		return r.SetRadioPower(false)
+	case "split":
+		return (value == 0 || value == 1) && r.SetSplit(value == 1)
+	case "incremental-tuning":
+		return cmd.Extra <= 1 && (value == 0 || value == 1) && r.SetIncrementalTuning(cmd.Extra == 1, value == 1)
+	case "tuning-offset":
+		return value >= -civ.MaxTuningOffset && value <= civ.MaxTuningOffset && r.SetTuningOffset(int(value))
+	case "tune-other-vfo":
+		return r.TuneOtherVFO(value)
 	case "tune":
 		return r.Tune(value)
 	case "mode":
 		return value >= 0 && value <= 8 && r.SetMode(byte(value))
+	case "filter-slot":
+		return value >= 1 && value <= 3 && r.SetFilterSlot(byte(value))
+	case "filter-width":
+		return value >= 50 && value <= 3600 && r.SetFilterWidth(int(value))
 	case "span":
 		return value >= 2500 && value <= 500000 && r.SetSpan(value)
 	case "scope-center":
@@ -332,4 +350,35 @@ func (c *Client) SetTuner(tuner byte) bool {
 }
 func (c *Client) SetRXControl(control civ.RXControl, value byte) bool {
 	return c.send(request{Action: "rx-control", Value: int64(control), Extra: value})
+}
+
+func (c *Client) SetSplit(on bool) bool {
+	return c.send(request{Action: "split", Value: boolValue(on)})
+}
+
+func (c *Client) SetIncrementalTuning(transmit, on bool) bool {
+	return c.send(request{Action: "incremental-tuning", Value: boolValue(on), Extra: byte(boolValue(transmit))})
+}
+
+func (c *Client) SetTuningOffset(hz int) bool {
+	return c.send(request{Action: "tuning-offset", Value: int64(hz)})
+}
+
+func (c *Client) SetFilterSlot(slot byte) bool {
+	return c.send(request{Action: "filter-slot", Value: int64(slot)})
+}
+
+func (c *Client) SetFilterWidth(hz int) bool {
+	return c.send(request{Action: "filter-width", Value: int64(hz)})
+}
+
+func (c *Client) TuneOtherVFO(hz int64) bool {
+	return c.send(request{Action: "tune-other-vfo", Value: hz})
+}
+
+func boolValue(on bool) int64 {
+	if on {
+		return 1
+	}
+	return 0
 }
