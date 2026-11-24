@@ -1,14 +1,13 @@
-# IC-RADIO v0.12.1
+# IC-RADIO v0.13.0
 
-IC-RADIO is dedicated to local and remote control of the Icom IC-7300 and IC-7300MK2 on Windows. Local mode connects directly over USB CI-V. Remote mode uses the included server on the same PC via `127.0.0.1`.
+IC-RADIO is dedicated to local USB CI-V control and server-based remote control of the Icom IC-7300 and IC-7300MK2. The remote server runs on the same Windows PC.
 
 ## Highlights
 
-- Added a menu for selecting the receiver preamp or attenuator.
-- Smoothed spectrum cursor movement during wheel tuning and improved retries when CI-V confirmation is delayed.
-- Refined the frequency readouts and RF band indicators.
-- Updated the README with the target radios and setup for each control mode.
+- Added DXFun Cluster spots to the RF waterfall. Public spots refresh every minute, and a live Telnet feed is optional.
+- Filter spots by DXCC region with ZONA. Click a callsign or flag to tune to its frequency, or open a grouped marker to select a station.
+- Reorganized the receiver controls to make room for CLUSTER and ZONA.
 
 ## Download
 
-Extract `IC-RADIO-Windows-x64-v0.12.1.zip` and run `ic-radio.exe`. For remote mode, also run `ic-radio-server.exe` on the same PC. Keep the `runtime` folder alongside the executables.
+Extract `IC-RADIO-Windows-x64-v0.13.0.zip` and run `ic-radio.exe`. The ZIP also includes `ic-radio-server.exe` for server mode. Keep the `runtime` folder alongside the executables.

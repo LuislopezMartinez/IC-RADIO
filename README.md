@@ -2,7 +2,7 @@
 
 IC-RADIO is a Windows console dedicated to local and remote control of the Icom IC-7300 and IC-7300MK2. It combines USB CI-V radio control, real-time RX/TX audio processing, and PTT over RTS or DTR. Local mode connects directly over USB. Remote mode uses the included server on the same Windows PC via loopback.
 
-![IC-RADIO Operation view showing the SPLIT, RIT, Delta TX, and RX filter controls](assets/screenshots/ic-radio-interface.png)
+![IC-RADIO Operation view showing the CLUSTER and ZONA controls](assets/screenshots/ic-radio-interface.png)
 
 ![IC-RADIO Audio view showing TX routing, meters, and filters](assets/screenshots/ic-radio-audio.jpg)
 
@@ -83,6 +83,16 @@ Open **CFG** to select the radio's USB COM port and the RTS or DTR line used for
 In **Operación**, use **RF POWER** to adjust the radio's output setting over CI-V. **TUNER** toggles the internal tuner and **TUNE** starts a tuning cycle. In **CFG**, **VFO INICIAL** lets you choose A, B, or manual selection when connecting.
 
 Use **RF GAIN**, **AF GAIN**, **SQL**, and **AGC** in Operación to adjust the receiver over CI-V. The **A=B** control asks for confirmation before sending the command to the radio. Band edge indicators mark the selected band on the RF display. Open **P.AMP / ATT** to select the preamp, attenuator, or off.
+
+### DX Cluster
+
+In **Operación**, turn on **CLUSTER** to load recent spots from DXFun for the
+active band. Public spots refresh every minute. Right-click **CLUSTER** to
+optionally add a live Telnet connection with your DXFun callsign.
+**ZONA** filters the spotted station's DXCC region. Only recent spots within
+the active band and visible sweep are shown. Spot labels descend from 0 to 10
+minutes of age on the waterfall. Click a callsign or its flag to
+tune to the advertised frequency. Click a grouped count to choose a station.
 
 ### Separate RX and TX tuning
 

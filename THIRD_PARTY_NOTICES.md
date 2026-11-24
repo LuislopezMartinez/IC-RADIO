@@ -29,3 +29,14 @@ Source: https://www.fftw.org/
 
 License: GNU General Public License, version 2 or later. A copy is included in
 `THIRD_PARTY_LICENSES/FFTW/GPL-2.0.txt`.
+
+## DX cluster reference data
+
+The DXCC prefix and exception table comes from Jim Reisert (AD1C)'s Big CTY
+release of 14 November 2026. See [Big CTY](https://www.country-files.com/bigcty/)
+and the bundled [copyright notice](internal/dxcluster/data/copyright.txt).
+
+The DXCC entity-to-country-code mapping comes from
+[K0SWE's DXCC JSON](https://github.com/k0swe/dxcc-json) under the
+[Apache License 2.0](internal/dxcluster/data/dxcc-LICENSE.txt).
+Flag PNGs come from [Flagpedia](https://flagpedia.net/download/api).

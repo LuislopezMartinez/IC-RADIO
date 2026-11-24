@@ -7,7 +7,7 @@ import (
 )
 
 func TestReceiverControlStripDoesNotOverlap(t *testing.T) {
-	rects := []rl.Rectangle{bandControl(), agcRect(), peakRect(), spanRect(), swrOverlayButton(), swrTestButton()}
+	rects := []rl.Rectangle{bandControl(), clusterButton(), clusterZoneButton(), agcRect(), peakRect(), spanRect(), swrOverlayButton(), swrTestButton()}
 	for i := range receiverKnobs {
 		rects = append(rects, receiverKnobRect(i))
 	}

@@ -26,7 +26,7 @@ type receiverControls struct {
 }
 
 func receiverKnobRect(index int) rl.Rectangle {
-	return rl.NewRectangle(155+float32(index)*128, 226, 124, 67)
+	return rl.NewRectangle(155+float32(index)*63, 226, 61, 67)
 }
 
 func agcRect() rl.Rectangle { return rl.NewRectangle(544, 240, 120, 36) }

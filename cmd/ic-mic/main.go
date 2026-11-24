@@ -882,7 +882,7 @@ func (a *app) update(mouse rl.Vector2) {
 		a.processor.Spectrum(a.spectrum, 10000)
 		return
 	}
-	if a.radio.page != pageConfig && !a.radio.editing && !a.radio.cancelled && !a.radio.modeMenu && !a.radio.bands.open && a.radio.bands.requestAt.IsZero() {
+	if a.radio.page != pageConfig && !a.radio.editing && !a.radio.cancelled && !a.radio.cluster.login && !a.radio.modeMenu && !a.radio.bands.open && a.radio.bands.requestAt.IsZero() {
 		a.updateKeyboardPTT()
 	}
 	if a.openDeviceMenu >= 0 {

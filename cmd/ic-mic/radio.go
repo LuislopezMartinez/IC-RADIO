@@ -37,6 +37,7 @@ type radioPanel struct {
 	swr                                   swrPanel
 	bands                                 bandSelector
 	receiver                              receiverControls
+	cluster                               clusterPanel
 	confirmVFOEqualize                    bool
 	vfoEqualizeSent, vfoEqualizeBaseline  time.Time
 	selectedBand                          byte
@@ -72,6 +73,7 @@ type radioPanel struct {
 }
 
 func (r *radioPanel) unload() {
+	r.cluster.unload()
 	r.fillGradient.unload()
 	if r.texture.ID != 0 {
 		rl.UnloadTexture(r.texture)
@@ -81,6 +83,7 @@ func (r *radioPanel) unload() {
 func (r *radioPanel) cancelInput() {
 	r.wheel = wheelTuning{}
 	r.receiver = receiverControls{}
+	r.cluster.closeMenus()
 	r.confirmVFOEqualize = false
 	r.rxAudio.menu = 0
 	if r.remoteEdit == editRemotePassword {
@@ -546,6 +549,12 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 		r.wheel = wheelTuning{}
 		return
 	}
+	if rl.IsWindowFocused() && !a.transmitting() && !state.TX && !r.editing && !r.modeMenu && !r.bands.open && !r.ifFilter.open &&
+		r.bands.requestAt.IsZero() && !r.receiver.ampOpen && !r.receiver.agcOpen && !r.receiver.dragging &&
+		a.updateCluster(mouse, state, online, canAdjustFilter) {
+		r.wheel = wheelTuning{}
+		return
+	}
 	if a.updateReceiverControls(mouse, state, online && state.TXKnown && !state.TX && !state.PowerPending &&
 		!a.transmitting() && !r.editing && !r.modeMenu && !r.bands.open && r.bands.requestAt.IsZero()) {
 		return
@@ -815,6 +824,9 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 			drawPreampMenu(state)
 		}
 	}
+	if !state.TX && !a.transmitting() {
+		r.cluster.drawMenus(mouse)
+	}
 	r.swr.draw(state.Frequency)
 	if r.confirmVFOEqualize {
 		drawVFOEqualizeConfirmation()
@@ -910,6 +922,7 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool, mous
 	drawRFOption(peakRect(), "PEAK", r.showPeak)
 	drawRXButtons(state, online)
 	r.receiver.draw(state, online)
+	r.cluster.drawButtons()
 	r.zoom.draw()
 	drawConsoleButton(spanRect(), "SPAN", false, true)
 	for _, x := range []int32{152, 540, 668, 980} {
@@ -1000,6 +1013,7 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool, mous
 	a.drawBandCoverage(graph, waterfall, sweep, state.Frequency, hz, cursor, exact)
 	r.swr.overlay(graph, sweep)
 	drawSplitMarkers(graph, waterfall, sweep, state, rx, tx)
+	r.drawClusterLabels(state, mouse)
 }
 
 func displayedFrequency(state civ.State, online bool, now time.Time) (hz int64, exact bool) {
