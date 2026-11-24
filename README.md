@@ -1,8 +1,6 @@
 # IC-RADIO
 
-RX/TX audio console for USB-equipped transceivers, featuring real-time DSP and
-PTT control through RTS or DTR. IC-RADIO lets you use an external USB
-microphone, process your voice, and route it to the radio USB audio input.
+IC-RADIO is a Windows console dedicated to local and remote control of the Icom IC-7300 and IC-7300MK2. It combines USB CI-V radio control, real-time RX/TX audio processing, and PTT over RTS or DTR. Local mode connects directly over USB. Remote mode uses the included server on the same Windows PC via loopback.
 
 ![IC-RADIO Operation view showing the SPLIT, RIT, Delta TX, and RX filter controls](assets/screenshots/ic-radio-interface.png)
 
@@ -37,15 +35,10 @@ microphone, process your voice, and route it to the radio USB audio input.
 
 ## Compatibility
 
-IC-RADIO works with transceivers that expose:
+IC-RADIO targets the **Icom IC-7300** and **Icom IC-7300MK2**. Connect the radio to the Windows PC over USB and select its CI-V serial port. For audio and PTT, select the radio's USB recording and playback devices, set USB audio as the modulation source, and match the radio's USB SEND setting to RTS or DTR in IC-RADIO.
 
-1. A USB recording endpoint carrying audio from the radio.
-2. A USB playback endpoint accepting modulation audio.
-3. A serial port capable of PTT control through RTS or DTR.
+Use the CI-V address shown in your radio's settings. The IC-7300 factory address is `94h`. For the IC-7300MK2, consult the [Icom CI-V reference guide](https://www.icomjapan.com/support/manual/4486/) and enter the address configured on your radio.
 
-Device names and radio menus vary by manufacturer. Select USB audio as the
-radio modulation source and assign PTT/SEND to the same RTS or DTR line chosen
-in IC-RADIO. The Icom IC-7300 is supported but is not required.
 
 ## Windows installation
 
@@ -79,9 +72,9 @@ packages, then run:
 WDSP and FFTW are GPL components. See `THIRD_PARTY_NOTICES.md` and the license
 copies under `THIRD_PARTY_LICENSES` before redistributing IC-RADIO.
 
-## IC-7300 operation
+## Local USB control
 
-Open **CFG** to select the radio's USB COM port and the RTS or DTR line used for PTT, then connect. On the IC-7300, set **CI-V USB Port** to **Unlink from [REMOTE]**, **CI-V USB Baud Rate** to **115200**, and enable **CI-V Transceive** for immediate dial updates. The factory CI-V address is `94h` and can be edited in CFG before connecting. Open the radio's **SCOPE** if sweep data does not appear. Close other applications that have opened the same COM port. For a PTT-only setup, turn off **CI-V USB** in CFG.
+Open **CFG** to select the radio's USB COM port and the RTS or DTR line used for PTT, then connect. On the radio, set **CI-V USB Port** to **Unlink from [REMOTE]**, **CI-V USB Baud Rate** to **115200**, and enable **CI-V Transceive** for immediate dial updates. Match the CI-V address in CFG to the address configured on your radio. Open the radio's **SCOPE** if sweep data does not appear. Close other applications that have opened the same COM port. For a PTT-only setup, turn off **CI-V USB** in CFG.
 
 **Operación** shows the radio frequency, operating mode, filter, RX/TX state, and RF spectrum with a waterfall. Click a digit and scroll over the frequency readout to tune in that digit’s steps, with lower places rounded in the direction of the scroll. Right-click the readout for direct Hz or MHz entry and press Enter. Click the trace or waterfall to tune to a signal. Enable **PEAK** to display a per-bin peak trace that drops gradually after each pulse. Click the span control to cycle spans in Center mode. Click the meter to select a reading on the PC. In **S / Po** mode, the reading follows the radio's receive or transmit state. The meter selection on the radio's physical screen is not synchronized.
 
@@ -89,7 +82,7 @@ Open **CFG** to select the radio's USB COM port and the RTS or DTR line used for
 
 In **Operación**, use **RF POWER** to adjust the radio's output setting over CI-V. **TUNER** toggles the internal tuner and **TUNE** starts a tuning cycle. In **CFG**, **VFO INICIAL** lets you choose A, B, or manual selection when connecting.
 
-Use **RF GAIN**, **AF GAIN**, **SQL**, and **AGC** in Operación to adjust the IC-7300 receiver over CI-V. The **A=B** control asks for confirmation before sending the command to the radio. Band edge indicators mark the selected band on the RF display.
+Use **RF GAIN**, **AF GAIN**, **SQL**, and **AGC** in Operación to adjust the receiver over CI-V. The **A=B** control asks for confirmation before sending the command to the radio. Band edge indicators mark the selected band on the RF display. Open **P.AMP / ATT** to select the preamp, attenuator, or off.
 
 ### Separate RX and TX tuning
 
@@ -100,7 +93,7 @@ Open **FILTRO RX** to select FIL1, FIL2, or FIL3 and adjust the IF bandwidth whe
 
 ### SWR measurements
 
-Open **TEST** in the spectrum controls to see the SWR graph and select the frequency step and number of points. Center the radio on the frequency you want to measure. The sweep requires the IC-7300 in receive, with SPLIT and ΔTX off, USB or LSB with USB modulation, and **USB Audio CODEC** as the Audio TX output. The sweep transmits a test tone. Use a suitable antenna or dummy load and check that the sweep frequencies are clear and allowed before pressing **INICIAR**. Press **DETENER** or Escape to cancel.
+Open **TEST** in the spectrum controls to see the SWR graph and select the frequency step and number of points. Center the radio on the frequency you want to measure. The sweep requires the radio in receive, with SPLIT and ΔTX off, USB or LSB with USB modulation, and **USB Audio CODEC** as the Audio TX output. The sweep transmits a test tone. Use a suitable antenna or dummy load and check that the sweep frequencies are clear and allowed before pressing **INICIAR**. Press **DETENER** or Escape to cancel.
 
 Completed sweeps are saved per band. Use **SWR** to overlay the saved sweep on the RF spectrum.
 
@@ -113,9 +106,9 @@ During transmission, Operación displays output power, SWR, ALC, supply voltage 
 
 ![IC-RADIO transmit telemetry with simulated readings](assets/screenshots/ic-radio-tx.png)
 
-## Local server mode
+## Remote control via the local server
 
-The Windows ZIP includes `ic-radio-server.exe`. Run it on the Windows PC connected to the IC-7300, select the USB COM port and CI-V address, and set an access password. The default PTT line is RTS. If the radio uses DTR, start the server with `-ptt-line DTR`. Run `ic-radio-server.exe -h` for the available options.
+The Windows ZIP includes `ic-radio-server.exe`. Run it on the Windows PC connected to the IC-7300 or IC-7300MK2, select the USB COM port and CI-V address, and set an access password. The default PTT line is RTS. If the radio uses DTR, start the server with `-ptt-line DTR`. Run `ic-radio-server.exe -h` for the available options.
 
 On that same PC, open `ic-radio.exe`, select **MODO REMOTO** in **CFG**, and enter the server address `127.0.0.1`, its port (default `7300`), and the same password. The server handles CI-V and, when the radio's USB audio devices are available, RX audio, microphone TX and PTT, and SWR sweeps. Close other applications using the radio's COM port before starting the server. This version listens only on the same PC.
 

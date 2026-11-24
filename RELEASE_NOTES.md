@@ -1,12 +1,14 @@
-# IC-RADIO v0.12.0
+# IC-RADIO v0.12.1
+
+IC-RADIO is dedicated to local and remote control of the Icom IC-7300 and IC-7300MK2 on Windows. Local mode connects directly over USB CI-V. Remote mode uses the included server on the same PC via `127.0.0.1`.
 
 ## Highlights
 
-- Added SPLIT, RIT and ΔTX controls, an editable offset, separate RX and TX frequency readouts, and spectrum markers.
-- Added the RX IF filter panel for FIL1–FIL3 and bandwidth adjustment, including a draggable passband edge in supported SSB states.
-- Extended CI-V and local server support for the new tuning and filter controls.
-- Updated the SWR sweep to require SPLIT and ΔTX to be off before transmitting.
+- Added a menu for selecting the receiver preamp or attenuator.
+- Smoothed spectrum cursor movement during wheel tuning and improved retries when CI-V confirmation is delayed.
+- Refined the frequency readouts and RF band indicators.
+- Updated the README with the target radios and setup for each control mode.
 
 ## Download
 
-Extract `IC-RADIO-Windows-x64-v0.12.0.zip` and run `ic-radio.exe`. Keep the `runtime` folder beside the executables. The ZIP also includes `ic-radio-server.exe` for local server mode.
+Extract `IC-RADIO-Windows-x64-v0.12.1.zip` and run `ic-radio.exe`. For remote mode, also run `ic-radio-server.exe` on the same PC. Keep the `runtime` folder alongside the executables.

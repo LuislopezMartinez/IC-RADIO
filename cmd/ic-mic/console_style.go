@@ -179,16 +179,10 @@ func (a *app) updateRadioButtons(mouse rl.Vector2, state civ.State) bool {
 		if control.control == civ.Preamp {
 			att := state.RX[civ.Attenuator]
 			if time.Since(att.At) >= 5*time.Second {
+				a.message = "Esperando estado de P.AMP / ATT"
 				return true
 			}
-			switch {
-			case att.Value != 0:
-				a.radio.session.SetRXControl(civ.Attenuator, 0)
-			case sample.Value < 2:
-				a.radio.session.SetRXControl(civ.Preamp, sample.Value+1)
-			default:
-				a.radio.session.SetRXControl(civ.Attenuator, 0x20)
-			}
+			a.radio.receiver.ampOpen = true
 		} else {
 			var value byte
 			if sample.Value == 0 {

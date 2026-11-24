@@ -532,7 +532,9 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 		} else if r.wheel.target != 0 {
 			display := state
 			display.Frequency = rxTuningFrequency(state, time.Now())
-			r.wheel.update(time.Now(), display, func(hz int64) bool { return r.commitTuning(state, hz) })
+			if r.wheel.update(time.Now(), display, func(hz int64) bool { return r.commitTuning(state, hz) }) {
+				a.message = "La emisora no ha confirmado la frecuencia solicitada"
+			}
 		}
 	}()
 	if !r.editing && r.ifFilter.open && rl.CheckCollisionPointRec(mouse, filterMenu) &&
@@ -661,9 +663,6 @@ func (a *app) updateOperation(mouse rl.Vector2) {
 		}
 		if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
 			shown, _ := r.shownFrequency(state, online, time.Now())
-			if rx, _ := state.EffectiveTuning(time.Now()); rx > 0 && r.wheel.target == 0 {
-				shown = rx
-			}
 			if digit := splitDigitAt(shown, mouse); digit != 0 {
 				r.digitStep = digit
 			} else {
@@ -811,6 +810,9 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 			for i := 1; i < len(agcLabels); i++ {
 				drawConsoleButton(agcOption(i), agcLabels[i], state.RX[civ.AGC].Value == byte(i), false)
 			}
+		}
+		if r.receiver.ampOpen {
+			drawPreampMenu(state)
 		}
 	}
 	r.swr.draw(state.Frequency)
@@ -987,13 +989,15 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool, mous
 	if r.texture.ID != 0 {
 		rl.DrawTexturePro(r.texture, rl.NewRectangle(.5, 0, civ.Samples-1, waterfallRows), waterfall, rl.Vector2{}, 0, rl.White)
 	}
-	hz, exact := r.shownFrequency(state, online, time.Now())
-	rx, tx := state.EffectiveTuning(time.Now())
-	if rx > 0 {
-		hz, exact = rx, true
+	now := time.Now()
+	hz, exact := r.shownFrequency(state, online, now)
+	rx, tx := state.EffectiveTuning(now)
+	cursor := r.wheel.cursorFrequency(hz, now)
+	if r.wheel.target != 0 {
+		rx = cursor
 	}
 	r.drawFilterEdge(state, rx, mouse)
-	a.drawBandCoverage(graph, waterfall, sweep, state.Frequency, hz, exact)
+	a.drawBandCoverage(graph, waterfall, sweep, state.Frequency, hz, cursor, exact)
 	r.swr.overlay(graph, sweep)
 	drawSplitMarkers(graph, waterfall, sweep, state, rx, tx)
 }

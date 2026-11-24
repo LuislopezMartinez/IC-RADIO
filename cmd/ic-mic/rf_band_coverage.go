@@ -37,7 +37,7 @@ func rfFrequencyX(graph rl.Rectangle, sweep civ.Sweep, hz int64) float32 {
 	return graph.X + float32(float64(hz-sweep.Low)/float64(sweep.High-sweep.Low))*graph.Width
 }
 
-func (a *app) drawBandCoverage(graph, waterfall rl.Rectangle, sweep civ.Sweep, frequency, tuned int64, exact bool) {
+func (a *app) drawBandCoverage(graph, waterfall rl.Rectangle, sweep civ.Sweep, frequency, tuned, cursor int64, exact bool) {
 	const height = 32
 	gap := waterfall.Y - graph.Y - graph.Height
 	bar := rl.NewRectangle(graph.X, graph.Y+graph.Height+(gap-height)/2, graph.Width, height)
@@ -75,8 +75,8 @@ func (a *app) drawBandCoverage(graph, waterfall rl.Rectangle, sweep civ.Sweep, f
 			drawBandEdge(bar, rfFrequencyX(graph, sweep, high), high, 1)
 		}
 	}
-	hasTune := tuned > 0 && tuned >= sweep.Low && tuned <= sweep.High
-	tuneX := rfFrequencyX(graph, sweep, tuned)
+	hasTune := cursor > 0 && cursor >= sweep.Low && cursor <= sweep.High
+	tuneX := rfFrequencyX(graph, sweep, cursor)
 	for i := 0; i <= 5; i++ {
 		x := left + float32(i)*bar.Width/5
 		hz := rfFrequency(graph, x, sweep)

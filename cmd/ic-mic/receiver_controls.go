@@ -19,10 +19,10 @@ var receiverKnobs = [...]struct {
 var agcLabels = [...]string{"OFF", "FAST", "MID", "SLOW"}
 
 type receiverControls struct {
-	agcOpen, dragging bool
-	knob              int
-	origin            rl.Vector2
-	base, preview     int
+	agcOpen, ampOpen, dragging bool
+	knob                       int
+	origin                     rl.Vector2
+	base, preview              int
 }
 
 func receiverKnobRect(index int) rl.Rectangle {
@@ -39,6 +39,18 @@ func (a *app) updateReceiverControls(mouse rl.Vector2, state civ.State, ready bo
 	if !ready || !rl.IsWindowFocused() {
 		*c = receiverControls{}
 		return false
+	}
+	if c.ampOpen {
+		if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
+			c.ampOpen = false
+			for i := range preampOptions {
+				if rl.CheckCollisionPointRec(mouse, preampOptionRect(i)) {
+					a.setPreampOption(state, i)
+					break
+				}
+			}
+		}
+		return true
 	}
 	if c.agcOpen {
 		if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
@@ -91,6 +103,47 @@ func (a *app) updateReceiverControls(mouse rl.Vector2, state civ.State, ready bo
 		}
 	}
 	return false
+}
+
+var preampOptions = [...]string{"OFF", "P.AMP 1", "P.AMP 2", "ATT"}
+
+func preampOptionRect(index int) rl.Rectangle {
+	button := rfControls[0].rect
+	return rl.NewRectangle(button.X, button.Y+button.Height+2+float32(index)*35, button.Width, 34)
+}
+
+func (a *app) setPreampOption(state civ.State, option int) {
+	preamp, att := state.RX[civ.Preamp], state.RX[civ.Attenuator]
+	if time.Since(preamp.At) >= 5*time.Second || time.Since(att.At) >= 5*time.Second {
+		a.message = "Esperando estado de P.AMP / ATT"
+		return
+	}
+	radio := a.radio.session
+	if option != 3 && att.Value != 0 && !radio.SetRXControl(civ.Attenuator, 0) {
+		a.message = "CI-V ocupado. Vuelve a elegir P.AMP / ATT"
+		return
+	}
+	level := byte(option)
+	if option == 3 {
+		level = 0
+	}
+	if preamp.Value != level && !radio.SetRXControl(civ.Preamp, level) {
+		a.message = "CI-V ocupado. Vuelve a elegir P.AMP / ATT"
+		return
+	}
+	if option == 3 && att.Value == 0 && !radio.SetRXControl(civ.Attenuator, 0x20) {
+		a.message = "CI-V ocupado. Vuelve a elegir P.AMP / ATT"
+	}
+}
+
+func drawPreampMenu(state civ.State) {
+	active := int(state.RX[civ.Preamp].Value)
+	if state.RX[civ.Attenuator].Value != 0 {
+		active = 3
+	}
+	for i, label := range preampOptions {
+		drawRFOptionSize(preampOptionRect(i), label, i == active, 16)
+	}
 }
 
 func (c receiverControls) draw(state civ.State, online bool) {

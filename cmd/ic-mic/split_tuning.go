@@ -215,9 +215,6 @@ func (r *radioPanel) drawSplitTuning(state civ.State, online, transmitting bool,
 			return
 		}
 		r.lastRXHz, r.lastTXHz = effectiveRX, effectiveTX
-		if effectiveRX > 0 && r.wheel.target == 0 {
-			rx, exact = effectiveRX, true
-		}
 		r.drawTuningFrequencies(state, rx, effectiveTX, exact)
 	} else {
 		r.lastRXHz, r.lastTXHz = 0, 0
