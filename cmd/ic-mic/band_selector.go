@@ -155,7 +155,14 @@ func (a *app) drawBandButton(state civ.State, online bool) {
 	if i := a.radio.coverageBand(state.Frequency); online && i >= 0 && time.Since(state.FrequencyAt) < 2*time.Second {
 		label += " " + radioBands[i].name
 	}
-	drawConsoleButton(bandControl(), label+"  ▼", a.radio.bands.open, false)
+	rect := bandControl()
+	fill, shade := rl.NewColor(62, 43, 20, 255), color.amber
+	if a.radio.bands.open {
+		fill, shade = color.amber, color.bg
+	}
+	rl.DrawRectangleRounded(rect, .22, 8, fill)
+	rl.DrawRectangleRoundedLinesEx(rect, .22, 8, 2, color.amber)
+	drawConsoleText(semiboldFont, label+"  ▼", rect, 22, shade)
 }
 
 func (a *app) drawBandPanel(state civ.State) {

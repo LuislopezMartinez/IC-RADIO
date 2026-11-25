@@ -2,7 +2,7 @@
 
 IC-RADIO is a Windows console dedicated to local and remote control of the Icom IC-7300 and IC-7300MK2. It combines USB CI-V radio control, real-time RX/TX audio processing, and PTT over RTS or DTR. Local mode connects directly over USB. Remote mode uses the included server on the same Windows PC via loopback.
 
-![IC-RADIO Operation view showing the CLUSTER and ZONA controls](assets/screenshots/ic-radio-interface.png)
+![IC-RADIO Operation view showing the amber BAND selector and the CLUSTER and ZONA controls](assets/screenshots/ic-radio-interface.png)
 
 ![IC-RADIO Audio view showing TX routing, meters, and filters](assets/screenshots/ic-radio-audio.jpg)
 
