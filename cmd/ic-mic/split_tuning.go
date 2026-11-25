@@ -272,12 +272,12 @@ func splitDigitAt(hz int64, mouse rl.Vector2) int64 {
 	return frequencyDigitAt(hz, mouse)
 }
 
-func drawSplitMarkers(graph, waterfall rl.Rectangle, sweep civ.Sweep, state civ.State, rx, tx int64) {
+func drawSplitMarkers(graph, waterfall rl.Rectangle, sweep civ.Sweep, state civ.State, rx, confirmedRX, tx int64) {
 	if rx >= sweep.Low && rx <= sweep.High && rx > 0 {
 		x := rfFrequencyX(waterfall, sweep, rx)
 		rl.DrawLineEx(rl.NewVector2(x, waterfall.Y), rl.NewVector2(x, waterfall.Y+waterfall.Height), 1, color.green)
 	}
-	if tx <= 0 || tx < sweep.Low || tx > sweep.High || tx == rx && !state.Split {
+	if tx <= 0 || tx < sweep.Low || tx > sweep.High || !state.Split && (confirmedRX == 0 || tx == confirmedRX) {
 		return
 	}
 	for _, area := range [...]rl.Rectangle{graph, waterfall} {

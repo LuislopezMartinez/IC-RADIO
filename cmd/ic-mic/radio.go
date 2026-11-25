@@ -970,14 +970,14 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool, mous
 		span = fmt.Sprintf("SPAN FIX · %.1f kHz", float64(sweep.High-sweep.Low)/1000)
 	}
 	drawConsoleButton(spanRect(), span, false, true)
-	r.envelope.update(sweep, peaks, time.Now())
-	if r.envelope.interval > 0 {
-		label := fmt.Sprintf("%.1f barridos/s", 1/r.envelope.interval.Seconds())
-		drawText(label, 100, 278, 13, color.muted)
+	if time.Since(state.ScopeRefAt) < 3*time.Second {
+		drawText(fmt.Sprintf("REF %+.1f dB", state.ScopeRefDB), 238, 278, 13, color.muted)
 	}
+	r.envelope.update(sweep, peaks, time.Now())
 	clipped := false
 	for i, sample := range r.envelope.levels {
 		x := graph.X + float32(i)*graph.Width/(civ.Samples-1)
+		// CI-V supplies the waveform drawn by the radio, including its REF setting.
 		level := r.zoom.displayLevel(sample)
 		peak := r.zoom.displayLevel(r.envelope.peakLevels[i])
 		clipped = clipped || level > 160 || (r.showPeak && peak > 160)
@@ -1004,7 +1004,8 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool, mous
 	}
 	now := time.Now()
 	hz, exact := r.shownFrequency(state, online, now)
-	rx, tx := state.EffectiveTuning(now)
+	confirmedRX, tx := state.EffectiveTuning(now)
+	rx := confirmedRX
 	cursor := r.wheel.cursorFrequency(hz, now)
 	if r.wheel.target != 0 {
 		rx = cursor
@@ -1012,7 +1013,7 @@ func (a *app) drawRF(state civ.State, peaks [civ.Samples]byte, online bool, mous
 	r.drawFilterEdge(state, rx, mouse)
 	a.drawBandCoverage(graph, waterfall, sweep, state.Frequency, hz, cursor, exact)
 	r.swr.overlay(graph, sweep)
-	drawSplitMarkers(graph, waterfall, sweep, state, rx, tx)
+	drawSplitMarkers(graph, waterfall, sweep, state, rx, confirmedRX, tx)
 	r.drawClusterLabels(state, mouse)
 }
 

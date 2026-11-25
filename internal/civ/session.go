@@ -49,6 +49,8 @@ type State struct {
 	Meters                 [23]int
 	MeterAt                [23]time.Time
 	Sweep                  Sweep
+	ScopeRefDB             float32
+	ScopeRefAt             time.Time
 	LastReply              time.Time
 	Error                  string
 }
@@ -454,6 +456,7 @@ const (
 	pollFilterWidth
 	pollPBT1
 	pollPBT2
+	pollScopeRef
 )
 
 // Interleave receiver controls with frequency, TX status and meter reads.
@@ -463,7 +466,7 @@ var pollPlan = [...]pollKind{
 	pollFrequency, pollMeter, pollRX, pollMode,
 	pollFrequency, pollRX, pollTX, pollMeter,
 	pollFrequency, pollPower, pollTuner, pollMeter, pollSplit, pollOffset, pollFrequency, pollRIT, pollDeltaTX, pollTX, pollOtherVFO,
-	pollFrequency, pollFilterMode, pollFilterWidth, pollRX, pollPBT1, pollPBT2,
+	pollFrequency, pollFilterMode, pollFilterWidth, pollRX, pollPBT1, pollPBT2, pollScopeRef,
 }
 
 func readyForCommand(elapsed time.Duration, answered bool) bool {
@@ -545,6 +548,8 @@ func (s *Session) isReply(frame, command []byte) bool {
 
 func (s *Session) pollCommand(kind pollKind, transmitting bool) []byte {
 	switch kind {
+	case pollScopeRef:
+		return []byte{0x27, 0x19, 0}
 	case pollFilterMode:
 		return []byte{0x26, 0}
 	case pollFilterWidth:
@@ -704,6 +709,12 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 		}
 		state.Meters[data[1]], state.MeterAt[data[1]] = int(level), now
 	case 0x27:
+		if len(data) >= 2 && data[1] == 0x19 {
+			if ref, ok := decodeScopeRef(data[2:]); ok {
+				state.ScopeRefDB, state.ScopeRefAt = ref, now
+			}
+			break
+		}
 		if len(data) < 2 || data[1] != 0 {
 			return
 		}
@@ -722,6 +733,21 @@ func (s *Session) receive(frame []byte, scope *assembler, now time.Time) {
 		return
 	}
 	state.LastReply = now
+}
+
+func decodeScopeRef(data []byte) (float32, bool) {
+	if len(data) != 4 || data[0] != 0 || data[1]>>4 > 2 ||
+		data[1]&0xf > 9 || (data[2] != 0 && data[2] != 0x50) || data[3] > 1 {
+		return 0, false
+	}
+	ref := float32(int(data[1]>>4)*10+int(data[1]&0xf)) + float32(data[2]>>4)/10
+	if ref > 20 {
+		return 0, false
+	}
+	if data[3] == 1 {
+		ref = -ref
+	}
+	return ref, true
 }
 
 type decoder struct{ pending []byte }
