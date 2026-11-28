@@ -20,10 +20,12 @@ import (
 )
 
 type configuration struct {
-	COM      string `json:"com"`
-	CIV      string `json:"civ"`
-	Port     string `json:"port"`
-	Password string `json:"password_verifier,omitempty"`
+	COM       string `json:"com"`
+	CIV       string `json:"civ"`
+	Port      string `json:"port"`
+	Password  string `json:"password_verifier,omitempty"`
+	RXAudioID string `json:"rx_audio_id,omitempty"`
+	TXAudioID string `json:"tx_audio_id,omitempty"`
 }
 
 func passwordVerifier(password string) (string, error) {
@@ -202,7 +204,8 @@ func promptConfiguration(reader *bufio.Scanner, out io.Writer, ports []ptt.Port,
 	if err != nil {
 		return configuration{}, err
 	}
-	return configuration{COM: ports[selected].Name, CIV: strings.ToUpper(address), Port: port, Password: defaults.Password}, nil
+	defaults.COM, defaults.CIV, defaults.Port = ports[selected].Name, strings.ToUpper(address), port
+	return defaults, nil
 }
 
 func prompt(reader *bufio.Scanner, out io.Writer, label, defaultValue string, valid func(string) bool) (string, error) {

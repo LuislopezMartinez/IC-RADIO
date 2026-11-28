@@ -55,9 +55,18 @@ type request struct {
 type display struct {
 	State civ.State
 	Peaks [civ.Samples]byte
+	Audio AudioDevices
 }
 
-func Handler(radio Radio, authenticate func(string) bool, onActivity func(), audio http.Handler, tx *TXAudio, sweep http.Handler) http.Handler {
+type AudioDevices struct {
+	RXInput, TXOutput string
+}
+
+func Handler(radio Radio, authenticate func(string) bool, onActivity func(), audio http.Handler, tx *TXAudio, sweep http.Handler, devices ...AudioDevices) http.Handler {
+	var audioDevices AudioDevices
+	if len(devices) > 0 {
+		audioDevices = devices[0]
+	}
 	mux := http.NewServeMux()
 	if audio != nil {
 		mux.Handle(audioPath, audio)
@@ -73,7 +82,7 @@ func Handler(radio Radio, authenticate func(string) bool, onActivity func(), aud
 		case http.MethodGet:
 			state, peaks := radio.TakeDisplaySnapshot()
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(display{state, peaks})
+			_ = json.NewEncoder(w).Encode(display{State: state, Peaks: peaks, Audio: audioDevices})
 		case http.MethodPost:
 			// A browser on another site cannot send this content type
 			// without a successful CORS preflight.
@@ -297,6 +306,12 @@ func (c *Client) Snapshot() civ.State {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.display.State
+}
+
+func (c *Client) AudioDevices() AudioDevices {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.display.Audio
 }
 
 func (c *Client) TakeDisplaySnapshot() (civ.State, [civ.Samples]byte) {

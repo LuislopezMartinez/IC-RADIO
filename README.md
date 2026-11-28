@@ -117,7 +117,7 @@ During transmission, Operación displays output power, SWR, ALC, supply voltage 
 
 ## Remote control via the local server
 
-The Windows ZIP includes `ic-radio-server.exe`. Run it on the Windows PC connected to the IC-7300 or IC-7300MK2, select the USB COM port and CI-V address, and set an access password. The default PTT line is RTS. If the radio uses DTR, start the server with `-ptt-line DTR`. Run `ic-radio-server.exe -h` for the available options.
+The Windows ZIP includes `ic-radio-server.exe`. Run it on the Windows PC connected to the IC-7300 or IC-7300MK2, select the USB COM port and CI-V address, and set an access password. The default PTT line is RTS. If the radio uses DTR, start the server with `-ptt-line DTR`. Run `ic-radio-server.exe -h` for the available options. If multiple matching USB audio devices are present, start the server interactively and choose the radio RX input and TX output. The server remembers the selected device IDs. The remote client displays the server-side device names when available.
 
 Open `ic-radio.exe`, select **MODO REMOTO** in **CFG**, and enter the server port (default `7300`) and password. Use `127.0.0.1` on the server PC or the **LAN address** shown by the server on another PC. If Windows Firewall prompts for access, allow the server on private networks. Use remote mode on a trusted LAN because the connection uses HTTP. Keep the server port off the public internet. The server handles CI-V and, when the radio's USB audio devices are available, RX audio, microphone TX and PTT, and SWR sweeps. Close other applications using the radio's COM port before starting the server.
 

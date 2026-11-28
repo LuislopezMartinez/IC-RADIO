@@ -29,6 +29,7 @@ func main() {
 
 func run() error {
 	cfg := loadConfiguration()
+	savedCOM := cfg.COM
 	flag.StringVar(&cfg.COM, "com", cfg.COM, "Puerto USB CI-V de la emisora")
 	flag.StringVar(&cfg.CIV, "civ", cfg.CIV, "Dirección CI-V hexadecimal, sin el sufijo h")
 	flag.StringVar(&cfg.Port, "puerto", cfg.Port, "TCP port for local network connections")
@@ -72,6 +73,9 @@ func run() error {
 	civAddress, _ := strconv.ParseUint(cfg.CIV, 16, 8)
 	portNumber, _ := strconv.ParseUint(cfg.Port, 10, 16)
 	cfg.CIV, cfg.Port = fmt.Sprintf("%02X", civAddress), strconv.FormatUint(portNumber, 10)
+	if !strings.EqualFold(cfg.COM, savedCOM) {
+		cfg.RXAudioID, cfg.TXAudioID = "", ""
+	}
 	endpoint := net.JoinHostPort("", cfg.Port)
 	listener, err := net.Listen("tcp4", endpoint)
 	if err != nil {
@@ -90,18 +94,28 @@ func run() error {
 	}
 	var audioHandler http.Handler
 	audio := &remote.RXAudio{}
-	audioDevice, stopAudio, audioErr := startRXCapture(audio, *rxName)
+	var selectionInput *bufio.Scanner
+	if info, err := os.Stdin.Stat(); interactive || err == nil && info.Mode()&os.ModeCharDevice != 0 {
+		selectionInput = input
+	}
+	audioDevice, rxID, stopAudio, audioErr := startRXCapture(audio, audioChoice{
+		label: "Radio RX input", name: *rxName, savedID: cfg.RXAudioID, input: selectionInput, output: os.Stdout,
+	})
 	if audioErr == nil {
+		cfg.RXAudioID = rxID
 		defer stopAudio()
 		audioHandler = audio
 	}
 	var tx *remote.TXAudio
 	var sweepHandler http.Handler
-	txDevice, txErr := findTXPlayback(*txName)
+	txDevice, txID, txErr := findTXPlayback(audioChoice{
+		label: "Radio TX output", name: *txName, savedID: cfg.TXAudioID, input: selectionInput, output: os.Stdout,
+	})
 	if txErr == nil {
 		var playback *audioio.PlaybackMonitor
 		playback, txErr = audioio.NewPlaybackMonitor()
 		if txErr == nil {
+			cfg.TXAudioID = txID
 			defer playback.Close()
 			tx = &remote.TXAudio{
 				Ready: func() bool {
@@ -114,7 +128,7 @@ func run() error {
 					return state.Error == "" && state.TXKnown && state.TX && time.Since(state.TXAt) < time.Second
 				},
 				Key:           controller.SetTX,
-				StartPlayback: func() error { return playback.StartNamed(txDevice) },
+				StartPlayback: func() error { return playback.StartByID(txID) },
 				StopPlayback:  playback.Stop,
 				Write:         playback.Write,
 			}
@@ -122,11 +136,15 @@ func run() error {
 			sweepHandler = tx.SweepHandler(radio, &controller)
 		}
 	}
+	audioDevices := remote.AudioDevices{RXInput: audioDevice}
+	if tx != nil {
+		audioDevices.TXOutput = txDevice
+	}
 	var lastActivity atomic.Int64
 	server := &http.Server{
 		Handler: remote.Handler(radio, passwordCheck(cfg.Password), func() {
 			lastActivity.Store(time.Now().UnixMilli())
-		}, audioHandler, tx, sweepHandler), ReadHeaderTimeout: 2 * time.Second,
+		}, audioHandler, tx, sweepHandler, audioDevices), ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second, IdleTimeout: 5 * time.Second,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

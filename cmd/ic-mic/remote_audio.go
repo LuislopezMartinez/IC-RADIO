@@ -234,8 +234,8 @@ func (a *app) drawRemoteAudioSelectors(mouse rl.Vector2) {
 		menu               int
 		label, placeholder string
 	}{
-		{remoteOutputMenu, "SALIDA DE AUDIO", "Seleccionar altavoces o auriculares"},
-		{remoteInputMenu, "MICRÓFONO", "Seleccionar micrófono"},
+		{remoteOutputMenu, "LOCAL PLAYBACK", "Select speakers or headphones"},
+		{remoteInputMenu, "LOCAL MICROPHONE", "Select microphone"},
 	} {
 		devices, saved := a.remoteAudioSelection(selector.menu)
 		index := remoteDeviceIndex(devices, *saved)

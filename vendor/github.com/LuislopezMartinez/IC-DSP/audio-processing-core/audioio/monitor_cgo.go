@@ -89,6 +89,24 @@ func (m *PlaybackMonitor) StartNamed(name string) error {
 	return fmt.Errorf("monitor output not found: %s", name)
 }
 
+func (m *PlaybackMonitor) StartByID(id string) error {
+	m.Stop()
+	if m.context == nil {
+		return fmt.Errorf("monitor engine is closed")
+	}
+	outputs, err := m.context.Devices(malgo.Playback)
+	if err != nil {
+		return fmt.Errorf("refresh monitor outputs: %w", err)
+	}
+	m.outputs = outputs
+	for i := range outputs {
+		if outputs[i].ID.String() == id {
+			return m.Start(i)
+		}
+	}
+	return fmt.Errorf("selected monitor output is unavailable")
+}
+
 // Write copies processed samples without retaining the caller's audio buffer.
 func (m *PlaybackMonitor) Write(samples []float32) {
 	if m == nil {

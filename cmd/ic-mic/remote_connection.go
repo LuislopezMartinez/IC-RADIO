@@ -208,5 +208,17 @@ func (a *app) drawRemoteConfig() {
 		label = "DESCONECTAR"
 	}
 	drawButton(configControl(710, 270), label, a.radio.remote != nil)
+	var devices remote.AudioDevices
+	if a.radio.remote != nil {
+		devices = a.radio.remote.AudioDevices()
+	}
+	if devices.RXInput == "" {
+		devices.RXInput = "Unavailable"
+	}
+	if devices.TXOutput == "" {
+		devices.TXOutput = "Unavailable"
+	}
+	drawText("Radio RX input   "+ellipsis(devices.RXInput, 56), 50, 242, 17, color.text)
+	drawText("Radio TX output   "+ellipsis(devices.TXOutput, 56), 50, 277, 17, color.text)
 	drawText(ellipsis(a.message, 100), 50, 336, 17, color.muted)
 }
