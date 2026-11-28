@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +42,8 @@ type clusterPanel struct {
 	zones                                        clusterZones
 	group                                        []dxcluster.Spot
 	groupX                                       float32
+	menuSpot                                     dxcluster.Spot
+	menuPosition                                 rl.Vector2
 	labels                                       []clusterLabel
 	view                                         clusterView
 	flags                                        map[string][]byte
@@ -179,12 +182,14 @@ func (c *clusterPanel) disconnect() {
 	c.stopWeb()
 	c.stop, c.events, c.spots = nil, nil, nil
 	c.group = nil
+	c.menuSpot = dxcluster.Spot{}
 	c.labels = nil
 }
 
 func (c *clusterPanel) closeMenus() {
 	c.login, c.zoneOpen = false, false
 	c.group = nil
+	c.menuSpot = dxcluster.Spot{}
 }
 
 func (c *clusterPanel) updateSpots(now time.Time) {
@@ -359,6 +364,19 @@ func (c *clusterPanel) groupRow(i int) rl.Rectangle {
 	return rl.NewRectangle(x, rfWaterfall().Y-float32(min(len(c.group), 10)-i)*26, 250, 25)
 }
 
+func (c *clusterPanel) openSpotMenu(spot dxcluster.Spot, mouse rl.Vector2) {
+	waterfall := rfWaterfall()
+	c.menuSpot = spot
+	c.menuPosition = rl.NewVector2(
+		min(mouse.X, waterfall.X+waterfall.Width-132),
+		min(mouse.Y, waterfall.Y+waterfall.Height-54),
+	)
+}
+
+func (c *clusterPanel) spotMenuRow(i int) rl.Rectangle {
+	return rl.NewRectangle(c.menuPosition.X, c.menuPosition.Y+float32(i)*27, 132, 26)
+}
+
 func (a *app) updateCluster(mouse rl.Vector2, state civ.State, online, canTune bool) bool {
 	r := &a.radio
 	c := &r.cluster
@@ -391,13 +409,28 @@ func (a *app) updateCluster(mouse rl.Vector2, state civ.State, online, canTune b
 		}
 		return true
 	}
+	if c.menuSpot.Call != "" {
+		if rl.IsKeyPressed(rl.KeyEscape) {
+			c.menuSpot = dxcluster.Spot{}
+		} else if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
+			spot := c.menuSpot
+			c.menuSpot = dxcluster.Spot{}
+			switch {
+			case canTune && clicked(mouse, c.spotMenuRow(0)):
+				a.tuneClusterSpot(state, spot)
+			case clicked(mouse, c.spotMenuRow(1)):
+				rl.OpenURL("https://www.qrz.com/db/" + url.PathEscape(spot.Call))
+			}
+		}
+		return true
+	}
 	if len(c.group) > 0 {
-		if !canTune || rl.IsKeyPressed(rl.KeyEscape) {
+		if rl.IsKeyPressed(rl.KeyEscape) {
 			c.group = nil
 		} else if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
 			for i, spot := range c.group[:min(len(c.group), 10)] {
 				if clicked(mouse, c.groupRow(i)) {
-					a.tuneClusterSpot(state, spot)
+					c.openSpotMenu(spot, mouse)
 					break
 				}
 			}
@@ -436,13 +469,11 @@ func (a *app) updateCluster(mouse rl.Vector2, state civ.State, online, canTune b
 			if !rl.CheckCollisionPointRec(mouse, label.rect) {
 				continue
 			}
-			if canTune {
-				if len(label.spots) == 1 {
-					a.tuneClusterSpot(state, label.spots[0])
-				} else {
-					c.group = append([]dxcluster.Spot(nil), label.spots...)
-					c.groupX = label.rect.X
-				}
+			if len(label.spots) == 1 {
+				c.openSpotMenu(label.spots[0], mouse)
+			} else {
+				c.group = append([]dxcluster.Spot(nil), label.spots...)
+				c.groupX = label.rect.X
 			}
 			return true
 		}
@@ -458,7 +489,7 @@ func (a *app) tuneClusterSpot(state civ.State, spot dxcluster.Spot) {
 	}
 	r.wheel = wheelTuning{}
 	if !r.commitTuning(state, spot.Hz) {
-		a.message = "No se pudo sintonizar el spot de " + spot.Call
+		a.message = "Could not tune to " + spot.Call
 	}
 }
 
@@ -513,7 +544,7 @@ func (r *radioPanel) drawClusterLabels(state civ.State, mouse rl.Vector2) {
 	}
 	for _, label := range labels {
 		rec := label.rect
-		active := rl.CheckCollisionPointRec(mouse, rec) && !c.zoneOpen && !c.login && len(c.group) == 0
+		active := rl.CheckCollisionPointRec(mouse, rec) && !c.zoneOpen && !c.login && len(c.group) == 0 && c.menuSpot.Call == ""
 		drawCutPanel(rec, 3, color.panel2, consoleEdge, 1)
 		spot := label.spots[0]
 		x := rfFrequencyX(rfWaterfall(), state.Sweep, spot.Hz)
@@ -581,10 +612,18 @@ func (c *clusterPanel) drawMenus(mouse rl.Vector2) {
 			}
 			drawText(label, int32(row.X+32), int32(row.Y+5), 15, color.text)
 		}
+	case c.menuSpot.Call != "":
+		for i, label := range [...]string{"Tune", "Open QRZ"} {
+			rec := c.spotMenuRow(i)
+			drawRFOptionSize(rec, label, rl.CheckCollisionPointRec(mouse, rec), 16)
+		}
 	case len(c.group) > 0:
 		for i, spot := range c.group[:min(len(c.group), 10)] {
 			rec := c.groupRow(i)
 			drawRFOptionSize(rec, spot.Call+"   "+clusterFrequency(spot.Hz), rl.CheckCollisionPointRec(mouse, rec), 15)
+			if clusterHasFlag(spot) {
+				c.drawFlag(spot.Entity.Flag, rec.X+8, rec.Y+(rec.Height-13)/2)
+			}
 		}
 	default:
 		if c.stop != nil && rl.CheckCollisionPointRec(mouse, clusterButton()) {

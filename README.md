@@ -1,6 +1,6 @@
 # IC-RADIO
 
-IC-RADIO is a Windows console dedicated to local and remote control of the Icom IC-7300 and IC-7300MK2. It combines USB CI-V radio control, real-time RX/TX audio processing, and PTT over RTS or DTR. Local mode connects directly over USB. Remote mode uses the included server on the same Windows PC via loopback.
+IC-RADIO is a Windows console dedicated to local and remote control of the Icom IC-7300 and IC-7300MK2. It combines USB CI-V radio control, real-time RX/TX audio processing, and PTT over RTS or DTR. Local mode connects directly over USB. Remote mode uses the included server on the same PC or over the local network.
 
 ![IC-RADIO Operation view showing the amber BAND selector and the CLUSTER and ZONA controls](assets/screenshots/ic-radio-interface.png)
 
@@ -91,8 +91,7 @@ active band. Public spots refresh every minute. Right-click **CLUSTER** to
 optionally add a live Telnet connection with your DXFun callsign.
 **ZONA** filters the spotted station's DXCC region. Only recent spots within
 the active band and visible sweep are shown. Spot labels descend from 0 to 10
-minutes of age on the waterfall. Click a callsign or its flag to
-tune to the advertised frequency. Click a grouped count to choose a station.
+minutes of age on the waterfall. Click a callsign or flag and choose **Tune** or **Open QRZ**. Click a grouped count to select a station first.
 
 ### Separate RX and TX tuning
 
@@ -120,7 +119,7 @@ During transmission, Operación displays output power, SWR, ALC, supply voltage 
 
 The Windows ZIP includes `ic-radio-server.exe`. Run it on the Windows PC connected to the IC-7300 or IC-7300MK2, select the USB COM port and CI-V address, and set an access password. The default PTT line is RTS. If the radio uses DTR, start the server with `-ptt-line DTR`. Run `ic-radio-server.exe -h` for the available options.
 
-On that same PC, open `ic-radio.exe`, select **MODO REMOTO** in **CFG**, and enter the server address `127.0.0.1`, its port (default `7300`), and the same password. The server handles CI-V and, when the radio's USB audio devices are available, RX audio, microphone TX and PTT, and SWR sweeps. Close other applications using the radio's COM port before starting the server. This version listens only on the same PC.
+Open `ic-radio.exe`, select **MODO REMOTO** in **CFG**, and enter the server port (default `7300`) and password. Use `127.0.0.1` on the server PC or the **LAN address** shown by the server on another PC. If Windows Firewall prompts for access, allow the server on private networks. Use remote mode on a trusted LAN because the connection uses HTTP. Keep the server port off the public internet. The server handles CI-V and, when the radio's USB audio devices are available, RX audio, microphone TX and PTT, and SWR sweeps. Close other applications using the radio's COM port before starting the server.
 
 
 ## PTT safety

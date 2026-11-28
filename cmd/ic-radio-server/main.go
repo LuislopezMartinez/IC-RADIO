@@ -31,7 +31,7 @@ func run() error {
 	cfg := loadConfiguration()
 	flag.StringVar(&cfg.COM, "com", cfg.COM, "Puerto USB CI-V de la emisora")
 	flag.StringVar(&cfg.CIV, "civ", cfg.CIV, "Dirección CI-V hexadecimal, sin el sufijo h")
-	flag.StringVar(&cfg.Port, "puerto", cfg.Port, "Puerto TCP de escucha en 127.0.0.1")
+	flag.StringVar(&cfg.Port, "puerto", cfg.Port, "TCP port for local network connections")
 	rxName := flag.String("rx-audio", "", "Nombre exacto de la entrada USB de audio de la emisora (detección automática por defecto)")
 	txName := flag.String("tx-audio", "", "Nombre exacto de la salida USB de audio de la emisora (detección automática por defecto)")
 	pttLine := flag.String("ptt-line", "RTS", "Línea USB SEND de la emisora (RTS o DTR)")
@@ -72,7 +72,7 @@ func run() error {
 	civAddress, _ := strconv.ParseUint(cfg.CIV, 16, 8)
 	portNumber, _ := strconv.ParseUint(cfg.Port, 10, 16)
 	cfg.CIV, cfg.Port = fmt.Sprintf("%02X", civAddress), strconv.FormatUint(portNumber, 10)
-	endpoint := net.JoinHostPort("127.0.0.1", cfg.Port)
+	endpoint := net.JoinHostPort("", cfg.Port)
 	listener, err := net.Listen("tcp4", endpoint)
 	if err != nil {
 		return err
@@ -199,6 +199,14 @@ func showConnection(cfg configuration, useColor bool) {
 		"Puerto de conexion      " + cfg.Port,
 		"Emisora por USB         " + cfg.COM + " / CI-V " + cfg.CIV + "h",
 		"Contrasena              La que has configurado",
+	}
+	if addresses, err := net.InterfaceAddrs(); err == nil {
+		for _, address := range addresses {
+			ip, _, err := net.ParseCIDR(address.String())
+			if err == nil && ip.To4() != nil && (ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+				lines = append(lines, "LAN address             "+ip.String())
+			}
+		}
 	}
 	width := 0
 	for _, line := range lines {

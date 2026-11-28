@@ -38,18 +38,13 @@ func (a *app) connectRemote() bool {
 		a.radio.page = pageConfig
 		return false
 	}
-	if !strings.EqualFold(host, "localhost") && host != "127.0.0.1" {
-		a.message = "Esta versión solo admite un servidor en este PC. Usa 127.0.0.1."
-		a.radio.page = pageConfig
-		return false
-	}
 	if a.radio.remotePassword == "" {
 		a.message = "Introduce la contraseña del servidor y pulsa Enter"
 		a.radio.page = pageConfig
 		a.radio.remoteEdit, a.radio.input = editRemotePassword, ""
 		return false
 	}
-	a.radio.remote = remote.Connect(net.JoinHostPort("127.0.0.1", strconv.FormatUint(number, 10)), a.radio.remotePassword)
+	a.radio.remote = remote.Connect(net.JoinHostPort(host, strconv.FormatUint(number, 10)), a.radio.remotePassword)
 	a.radio.session = a.radio.remote
 	a.radio.requestInitialVFO()
 	a.message = "Servidor remoto · " + net.JoinHostPort(host, port)

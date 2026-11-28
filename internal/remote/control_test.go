@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -8,6 +9,31 @@ import (
 
 	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
 )
+
+func TestLocalNetworkControl(t *testing.T) {
+	handler := Handler(&testRadio{}, func(password string) bool {
+		return password == "test-password"
+	}, func() {}, nil, nil, nil)
+	for _, tt := range []struct {
+		peer, password, origin string
+		status                 int
+	}{
+		{"192.168.1.42:50000", "test-password", "", http.StatusOK},
+		{"192.168.1.42:50000", "wrong", "", http.StatusUnauthorized},
+		{"192.168.1.42:50000", "test-password", "https://example.com", http.StatusForbidden},
+		{"203.0.113.42:50000", "test-password", "", http.StatusForbidden},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:7300"+Path, nil)
+		req.RemoteAddr = tt.peer
+		req.SetBasicAuth("ic-radio", tt.password)
+		req.Header.Set("Origin", tt.origin)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != tt.status {
+			t.Errorf("peer %s: got status %d, want %d", tt.peer, res.Code, tt.status)
+		}
+	}
+}
 
 type testRadio struct {
 	Radio

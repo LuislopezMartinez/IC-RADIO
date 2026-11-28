@@ -75,7 +75,7 @@ func Handler(radio Radio, authenticate func(string) bool, onActivity func(), aud
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(display{state, peaks})
 		case http.MethodPost:
-			// A browser on another site cannot send this content type to localhost
+			// A browser on another site cannot send this content type
 			// without a successful CORS preflight.
 			if r.Header.Get("Content-Type") != "application/json" {
 				w.WriteHeader(http.StatusUnsupportedMediaType)
@@ -105,8 +105,9 @@ func Handler(radio Radio, authenticate func(string) bool, onActivity func(), aud
 		}
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, _ := net.SplitHostPort(r.Host)
-		if host != "127.0.0.1" && host != "localhost" {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		peer := net.ParseIP(host)
+		if peer == nil || !(peer.IsLoopback() || peer.IsPrivate() || peer.IsLinkLocalUnicast()) || r.Header.Get("Origin") != "" {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
