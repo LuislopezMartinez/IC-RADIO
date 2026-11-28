@@ -30,7 +30,7 @@ var radioMeters = [...]struct {
 }{{"S / Po", 0}, {"S", 2}, {"Po", 0x11}, {"SWR", 0x12}, {"ALC", 0x13}, {"COMP", 0x14}, {"Vd", 0x15}, {"Id", 0x16}}
 
 type radioPanel struct {
-	txNeedles                             txNeedles
+	txMeters                              txMeterDisplay
 	initialVFOPending                     bool
 	initialVFOAttempt, initialVFOBaseline time.Time
 	output                                outputControls
@@ -805,11 +805,11 @@ func (a *app) drawOperation(mouse rl.Vector2) {
 	r.drawSplitTuning(state, online, transmitting, mouse)
 	if transmitting {
 		now := time.Now()
-		readings := txReadings(state, online, now)
+		readings := r.txMeters.update(txReadings(state, online, now), state.TXSince, now)
 		drawTXHeaderPower(readings[0])
-		a.drawTXTelemetry(readings, state, now)
+		drawTXTelemetry(readings, r.txMeters.position)
 	} else {
-		r.txNeedles = txNeedles{}
+		r.txMeters = txMeterDisplay{}
 		a.drawRadioMeter(state, online)
 		a.drawRF(state, peaks, online, mouse)
 		a.drawBandButton(state, online)

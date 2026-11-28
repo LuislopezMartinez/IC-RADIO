@@ -111,7 +111,7 @@ Completed sweeps are saved per band. Use **SWR** to overlay the saved sweep on t
 
 ### TX telemetry
 
-During transmission, Operación displays output power, SWR, ALC, supply voltage and current, and compressor level when reported by the radio.
+During transmission, Operación displays output power, SWR, ALC, supply voltage and current, and compressor level when reported by the radio. The TX indicators are smoothed for readability. The Po needle, bar and numeric readout rise quickly and fall gradually between voice peaks. The numeric SWR readout shows the latest valid radio measurement.
 
 ![IC-RADIO transmit telemetry with simulated readings](assets/screenshots/ic-radio-tx.png)
 

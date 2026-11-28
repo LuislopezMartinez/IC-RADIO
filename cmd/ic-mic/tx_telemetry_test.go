@@ -26,3 +26,29 @@ func TestTXTelemetryCalibratesAndRejectsStaleReadings(t *testing.T) {
 		t.Fatal("displayed SWR with no RF or reused a previous TX reading")
 	}
 }
+
+func TestTXMeterDisplayRespondsQuicklyAndLetsPowerFallGradually(t *testing.T) {
+	start := time.Now()
+	var display txMeterDisplay
+	readings := [6]txReading{
+		{code: 0x11, value: 100, limit: 100, available: true},
+		{code: 0x12, value: 2.5, limit: 3, available: true},
+	}
+	display.update(readings, start, start)
+	peak := display.update(readings, start, start.Add(90*time.Millisecond))
+	if peak[0].value < 60 || peak[0].value > 65 || peak[1].value != 2.5 {
+		t.Fatalf("unexpected attack or SWR reading: %+v", peak)
+	}
+
+	readings[0].value = 0
+	falling := display.update(readings, start, start.Add(180*time.Millisecond))
+	if falling[0].value < 45 || falling[0].value >= peak[0].value {
+		t.Fatalf("power should fall gradually, got %.1f after %.1f", falling[0].value, peak[0].value)
+	}
+
+	readings[0].available = false
+	missing := display.update(readings, start, start.Add(270*time.Millisecond))
+	if missing[0].available || display.position[0] != 0 {
+		t.Fatal("display retained unavailable power")
+	}
+}

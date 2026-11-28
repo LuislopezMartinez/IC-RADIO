@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"github.com/LuislopezMartinez/IC-RADIO/internal/swr"
 	"math"
 	"time"
 
 	"github.com/LuislopezMartinez/IC-RADIO/internal/civ"
+	"github.com/LuislopezMartinez/IC-RADIO/internal/swr"
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
@@ -77,22 +77,38 @@ func (r txReading) fraction() float64 {
 	return r.value / r.limit
 }
 
-type txNeedles struct {
-	position       [3]float64
+type txMeterDisplay struct {
+	position       [6]float64
 	since, drawnAt time.Time
 }
 
-func (n *txNeedles) update(readings [6]txReading, since, now time.Time) {
-	if n.since != since || now.Sub(n.drawnAt) > time.Second {
-		*n = txNeedles{since: since, drawnAt: now}
+func (d *txMeterDisplay) update(readings [6]txReading, since, now time.Time) [6]txReading {
+	if d.since != since || now.Sub(d.drawnAt) > time.Second {
+		*d = txMeterDisplay{since: since, drawnAt: now}
 	}
-	gain := -math.Expm1(-now.Sub(n.drawnAt).Seconds() / .12)
-	for i := range n.position {
-		if readings[i].available {
-			n.position[i] += (readings[i].fraction() - n.position[i]) * gain
+	elapsed := now.Sub(d.drawnAt).Seconds()
+	for i, reading := range readings {
+		if !reading.available {
+			d.position[i] = 0
+			continue
+		}
+		target := min(1, max(0, reading.fraction()))
+		seconds := .16
+		if reading.code == 0x11 {
+			// Respond promptly to voice peaks and let the power indication fall more slowly.
+			seconds = .09
+			if target < d.position[i] {
+				seconds = .38
+			}
+		}
+		gain := -math.Expm1(-elapsed / seconds)
+		d.position[i] += (target - d.position[i]) * gain
+		if reading.code != 0x12 {
+			readings[i].value = d.position[i] * reading.limit
 		}
 	}
-	n.drawnAt = now
+	d.drawnAt = now
+	return readings
 }
 
 func txScalePoint(center rl.Vector2, radius float32, fraction float64) rl.Vector2 {
@@ -143,16 +159,22 @@ func drawTXGauge(rect rl.Rectangle, reading txReading, position float64) {
 	drawConsoleText(displayFont, reading.text(), rl.NewRectangle(rect.X+15, center.Y+20, rect.Width-30, 49), 48, color.text)
 }
 
+func txSegmentColor(reading txReading, index, count int) rl.Color {
+	background := rl.NewColor(45, 45, 50, 255)
+	if !reading.available {
+		return background
+	}
+	fill := min(1, max(0, reading.fraction()*float64(count)-float64(index)))
+	return rl.ColorLerp(background, color.signal, float32(fill))
+}
+
 func drawTXReadout(rect rl.Rectangle, reading txReading, ticks []string) {
 	drawText(reading.label, int32(rect.X+19), int32(rect.Y+12), 25, color.text)
 	drawConsoleText(displayFont, reading.text(), rl.NewRectangle(rect.X+148, rect.Y+4, rect.Width-165, 51), 42, color.text)
 	const segments = 25
 	x, y, w := rect.X+20, rect.Y+65, rect.Width-40
 	for i := 0; i < segments; i++ {
-		shade := rl.NewColor(45, 45, 50, 255)
-		if reading.available && float64(i+1)/segments <= reading.fraction() {
-			shade = color.signal
-		}
+		shade := txSegmentColor(reading, i, segments)
 		rl.DrawRectangleRec(rl.NewRectangle(x+float32(i)*w/segments, y, w/segments-2, 15), shade)
 	}
 	rl.DrawLineEx(rl.NewVector2(x, y+21), rl.NewVector2(x+w, y+21), 1, color.muted)
@@ -163,14 +185,13 @@ func drawTXReadout(rect rl.Rectangle, reading txReading, ticks []string) {
 	}
 }
 
-func (a *app) drawTXTelemetry(readings [6]txReading, state civ.State, now time.Time) {
+func drawTXTelemetry(readings [6]txReading, positions [6]float64) {
 	drawConsolePanel(rl.NewRectangle(7, 225, 1586, 533), consoleEdge)
 	drawText("TRANSMISIÓN", 28, 243, 30, color.text)
-	n := &a.radio.txNeedles
-	n.update(readings, state.TXSince, now)
+
 	for i := range 3 {
 		r := rl.NewRectangle(25+float32(i)*520, 291, 509, 292)
-		drawTXGauge(r, readings[i], n.position[i])
+		drawTXGauge(r, readings[i], positions[i])
 	}
 	drawConsolePanel(rl.NewRectangle(25, 596, 1549, 145), consoleEdge)
 	for i, ticks := range [][]string{{"0", "4", "8", "12", "16 V"}, {"0", "5", "10", "15", "20", "25 A"}, {"0", "5", "10", "15", "20", "25", "30 dB"}} {
@@ -186,10 +207,7 @@ func drawTXHeaderPower(reading txReading) {
 	drawConsoleText(semiboldFont, "Po", rl.NewRectangle(1040, 127, 83, 46), 29, color.text)
 	const x, y, width, segments = 1140, 143, 417, 32
 	for i := range segments {
-		shade := rl.NewColor(45, 45, 50, 255)
-		if reading.available && float64(i+1)/segments <= reading.fraction() {
-			shade = color.signal
-		}
+		shade := txSegmentColor(reading, i, segments)
 		rl.DrawRectangle(x+int32(i)*width/segments, y, width/segments-2, 22, shade)
 	}
 	for i, label := range []string{"0", "25", "50", "75", "100 %"} {
